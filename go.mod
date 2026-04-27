@@ -1,3 +1,3 @@
-module github.com/whoisclebs/rush
+module github.com/go-golpher/golpher
 
 go 1.23.6

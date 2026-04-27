@@ -1,6 +1,7 @@
-package rush
+package golpher
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"io"
@@ -21,13 +22,18 @@ func (request *Request) Headers() map[string][]string {
 	return request.http.Header
 }
 
+func (request *Request) Context() context.Context {
+	return request.http.Context()
+}
+
 func (request *Request) Body() *Body {
-	if request.body.bytes != nil {
-		return &Body{bytes: request.body.bytes}
+	if request.body != nil {
+		return request.body
 	}
 	data, err := io.ReadAll(request.http.Body)
 	if err != nil {
-		return &Body{error: err}
+		request.body = &Body{error: err}
+		return request.body
 	}
 	request.body = &Body{bytes: data}
 	return request.body

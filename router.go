@@ -1,4 +1,4 @@
-package rush
+package golpher
 
 import "net/http"
 
@@ -16,7 +16,7 @@ func (r *Router) handle(method, pattern string, handler HandlerFunc) {
 			Response: response,
 		}
 		if req.Method != method {
-			r.app.ErrorHandler(ctx, ErrorRush{Code: 405, Message: "Method Not Allowed"})
+			r.app.ErrorHandler(ctx, ErrorGolpher{Code: 405, Message: "Method Not Allowed"})
 			return
 		}
 		if err := handler(request, response); err != nil {

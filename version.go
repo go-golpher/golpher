@@ -1,3 +1,3 @@
-package rush
+package golpher
 
 const version = "0.0.0"

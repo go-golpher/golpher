@@ -1,4 +1,4 @@
-package rush
+package golpher
 
 type Context struct {
 	Request  *Request

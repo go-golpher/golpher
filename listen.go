@@ -1,4 +1,4 @@
-package rush
+package golpher
 
 import (
 	"fmt"
@@ -10,12 +10,12 @@ import (
 type ListenConfig struct {
 }
 
-var figletRush = `
- ______     __  __     ______     __  __    
-/\  == \   /\ \/\ \   /\  ___\   /\ \_\ \   
-\ \  __<   \ \ \_\ \  \ \___  \  \ \  __ \  
- \ \_\ \_\  \ \_____\  \/\_____\  \ \_\ \_\ 		%s
-  \/_/ /_/   \/_____/   \/_____/   \/_/\/_/			Listen in port: %v`
+var figletGolpher = `
+ ______     ______     __         ______   __  __     ______     ______    
+/\  ___\   /\  __ \   /\ \       /\  == \ /\ \_\ \   /\  ___\   /\  == \   
+\ \ \__ \  \ \ \/\ \  \ \ \____  \ \  _-/ \ \  __ \  \ \  __\   \ \  __<   
+ \ \_____\  \ \_____\  \ \_____\  \ \_\    \ \_\ \_\  \ \_____\  \ \_\ \_\ 	%s
+  \/_____/   \/_____/   \/_____/   \/_/     \/_/\/_/   \/_____/   \/_/ /_/	Listen in port: %v`
 
 func (app *App) Listen(configs ...ListenConfig) {
 	port := fmt.Sprintf(":%v", app.Config.Port)
@@ -24,7 +24,7 @@ func (app *App) Listen(configs ...ListenConfig) {
 		log.Fatalf("Error binding to %s: %v", port, err)
 		return
 	}
-	log.Println(fmt.Sprintf(figletRush, version, port))
+	log.Println(fmt.Sprintf(figletGolpher, version, port))
 	if err := http.Serve(listener, app); err == nil {
 		log.Fatal(err)
 	}

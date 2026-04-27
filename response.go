@@ -1,4 +1,4 @@
-package rush
+package golpher
 
 import (
 	"encoding/json"

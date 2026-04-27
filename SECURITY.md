@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in **Rush**, please report it responsibly by following these steps:
+If you discover a security vulnerability in **Golpher**, please report it responsibly by following these steps:
 
 1. **Do not disclose the vulnerability publicly** until it has been addressed.
 2. **Email us** at `security [at] whoisclebs [dot] com` with a detailed description of the issue.
@@ -14,8 +14,8 @@ If you discover a security vulnerability in **Rush**, please report it responsib
 5. **We will release a fix** in a timely manner and credit the reporter if they wish.
 
 ## Security Best Practices
-To ensure your applications using **Rush** remain secure, follow these best practices:
-- Always use the latest version of **Rush**.
+To ensure your applications using **Golpher** remain secure, follow these best practices:
+- Always use the latest version of **Golpher**.
 - Implement proper authentication and authorization mechanisms.
 - Regularly audit your dependencies for vulnerabilities.
 - Use secure communication protocols (e.g., HTTPS, TLS).
@@ -25,4 +25,4 @@ We appreciate responsible disclosure of security vulnerabilities. If a vulnerabi
 
 For any security-related concerns, please reach out to us at `security [at] whoisclebs [dot] com`.
 
-Thank you for helping to keep **Rush** secure! 🚀
+Thank you for helping to keep **Golpher** secure! 🚀
