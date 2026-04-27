@@ -35,7 +35,7 @@ jobs:
       - name: Check formatting
         shell: bash
         run: |
-          test -z "$(gofmt -l .)"
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
 
       - name: Vet
         run: go vet ./...
