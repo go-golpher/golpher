@@ -15,7 +15,7 @@ jobs:
   coverage:
     strategy:
       matrix:
-        go: [ 'stable' ]
+        go: [ '1.23.x' ]
         os: [ ubuntu-latest ]
     runs-on: ${{ matrix.os }}
     steps:
@@ -41,5 +41,5 @@ jobs:
           files: coverage.out
           flags: unit
           name: golpher-go-coverage
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
