@@ -58,6 +58,7 @@ GitHub Actions currently run:
 - Lint: dedicated `golangci-lint` workflow.
 - Coverage: race test with coverage profile.
 - Govulncheck: Go vulnerability scanning.
+- Snyk: dependency vulnerability scanning through the Snyk GitHub integration.
 - CodeQL: GitHub code scanning.
 
 Dependabot keeps Go module metadata and GitHub Actions dependencies up to date.

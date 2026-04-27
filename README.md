@@ -4,6 +4,7 @@
 [![Coverage](https://github.com/go-golpher/golpher/actions/workflows/coverage.yml/badge.svg)](https://github.com/go-golpher/golpher/actions/workflows/coverage.yml)
 [![codecov](https://codecov.io/gh/go-golpher/golpher/graph/badge.svg)](https://codecov.io/gh/go-golpher/golpher)
 [![Govulncheck](https://github.com/go-golpher/golpher/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/go-golpher/golpher/actions/workflows/govulncheck.yml)
+[![Snyk](https://github.com/go-golpher/golpher/actions/workflows/snyk.yml/badge.svg)](https://github.com/go-golpher/golpher/actions/workflows/snyk.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-golpher/golpher.svg)](https://pkg.go.dev/github.com/go-golpher/golpher)
 [![Go Report Card](https://goreportcard.com/badge/github.com/go-golpher/golpher)](https://goreportcard.com/report/github.com/go-golpher/golpher)
 
