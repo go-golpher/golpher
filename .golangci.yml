@@ -1,16 +1,18 @@
+version: "2"
+
 run:
+  go: "1.23"
   timeout: 5m
   tests: true
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - bodyclose
     - copyloopvar
     - errcheck
     - errorlint
     - gocritic
-    - gofmt
     - gosec
     - govet
     - ineffassign
@@ -21,16 +23,15 @@ linters:
     - unconvert
     - unused
     - whitespace
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    gosec:
+      excludes:
+        - G104
 
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-        disabled: true
-  gosec:
-    excludes:
-      - G104
-
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt

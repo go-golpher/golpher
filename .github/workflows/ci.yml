@@ -15,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: [ '1.23.x', '1.25.x' ]
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        go: [ '1.23.6', '1.25.0' ]
+        os: [ ubuntu-24.04, macos-14, windows-2022 ]
 
     steps:
       - name: Checkout
@@ -41,10 +41,10 @@ jobs:
         run: go vet ./...
 
       - name: Lint
-        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.23.x'
-        uses: golangci/golangci-lint-action@v6
+        if: matrix.os == 'ubuntu-24.04' && matrix.go == '1.23.6'
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
+          version: v2.11.4
           args: --timeout=5m
 
       - name: Test

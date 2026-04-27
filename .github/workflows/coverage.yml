@@ -15,8 +15,8 @@ jobs:
   coverage:
     strategy:
       matrix:
-        go: [ '1.23.x' ]
-        os: [ ubuntu-latest ]
+        go: [ '1.23.6' ]
+        os: [ ubuntu-24.04 ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
