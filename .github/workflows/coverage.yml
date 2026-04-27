@@ -1,23 +1,35 @@
 name: Coverage
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
     paths-ignore:
       - '**.md'
+
+permissions:
+  contents: read
+
 jobs:
   coverage:
     strategy:
       matrix:
-        go: [ 'stable', '1.21.x' ]
+        go: [ 'stable' ]
         os: [ ubuntu-latest ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
           cache: true
-          cache-dependency-path: go.sum
-    
+          cache-dependency-path: go.mod
+
+      - name: Run coverage
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Show coverage
+        run: go tool cover -func=coverage.out

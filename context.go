@@ -6,3 +6,5 @@ type Context struct {
 }
 
 type HandlerFunc func(Request *Request, Response *Response) error
+
+type MiddlewareFunc func(HandlerFunc) HandlerFunc

@@ -3,7 +3,6 @@ package golpher
 import (
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 )
 
@@ -19,13 +18,8 @@ var figletGolpher = `
 
 func (app *App) Listen(configs ...ListenConfig) {
 	port := fmt.Sprintf(":%v", app.Config.Port)
-	listener, err := net.Listen("tcp", port)
-	if err != nil {
-		log.Fatalf("Error binding to %s: %v", port, err)
-		return
-	}
 	log.Println(fmt.Sprintf(figletGolpher, version, port))
-	if err := http.Serve(listener, app); err == nil {
+	if err := app.Server(port).ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

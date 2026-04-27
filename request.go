@@ -9,8 +9,9 @@ import (
 )
 
 type Request struct {
-	http *http.Request
-	body *Body
+	http   *http.Request
+	body   *Body
+	params map[string]string
 }
 
 type Body struct {
@@ -22,8 +23,27 @@ func (request *Request) Headers() map[string][]string {
 	return request.http.Header
 }
 
+func (request *Request) Raw() *http.Request {
+	return request.http
+}
+
 func (request *Request) Context() context.Context {
 	return request.http.Context()
+}
+
+func (request *Request) Param(name string) string {
+	if request.params == nil {
+		return ""
+	}
+	return request.params[name]
+}
+
+func (request *Request) Query(name string) string {
+	return request.http.URL.Query().Get(name)
+}
+
+func (request *Request) NewError(status int, err string) error {
+	return ErrorGolpher{Code: status, Message: err}
 }
 
 func (request *Request) Body() *Body {

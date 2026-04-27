@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+set -eu
+
+commit_msg_file="${1:-}"
+
+if [ -z "$commit_msg_file" ] || [ ! -f "$commit_msg_file" ]; then
+  echo "commit-msg hook: missing commit message file" >&2
+  exit 1
+fi
+
+first_line="$(sed -n '1p' "$commit_msg_file")"
+
+case "$first_line" in
+  Merge\ *|Revert\ *)
+    exit 0
+    ;;
+esac
+
+pattern='^(feat|fix|docs|refactor|test|perf|chore|ci|build|style|revert)(\([a-z0-9._-]+\))?!?: .{1,72}$'
+
+if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
+  cat >&2 <<'EOF'
+Invalid commit message.
+
+Use Conventional Commits:
+  <type>(optional-scope): <short summary>
+
+Allowed types:
+  feat, fix, docs, refactor, test, perf, chore, ci, build, style, revert
+
+Examples:
+  feat(router): add path params
+  fix(middleware): preserve http error responses
+  ci: add golangci-lint
+
+Rules:
+  - subject must be present
+  - first line must be at most 72 characters after the prefix
+  - optional scope must be lowercase letters, digits, dot, underscore or dash
+EOF
+  exit 1
+fi
