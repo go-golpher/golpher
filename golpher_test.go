@@ -350,6 +350,22 @@ func TestResponseStatusThenJSONWritesStatusAndContentType(t *testing.T) {
 	}
 }
 
+func TestResponseSendStoresBodySnapshot(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := &Response{writer: rec}
+
+	if err := res.Status(http.StatusOK).Send([]byte("golpher")); err != nil {
+		t.Fatalf("unexpected send error: %v", err)
+	}
+
+	if string(res.Body()) != "golpher" {
+		t.Fatalf("expected body snapshot golpher, got %q", string(res.Body()))
+	}
+	if res.BodyString() != "golpher" {
+		t.Fatalf("expected body string golpher, got %q", res.BodyString())
+	}
+}
+
 func TestResponseStatusThenXMLWritesStatusAndContentType(t *testing.T) {
 	rec := httptest.NewRecorder()
 	res := &Response{writer: rec}

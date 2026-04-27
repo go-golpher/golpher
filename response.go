@@ -1,6 +1,7 @@
 package golpher
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -8,7 +9,7 @@ import (
 )
 
 type Response struct {
-	body       []byte
+	body       bytes.Buffer
 	statusCode int
 	writer     http.ResponseWriter
 }
@@ -28,8 +29,17 @@ func (response *Response) Header() http.Header {
 
 func (response *Response) Send(body []byte) error {
 	response.writeStatus()
+	response.body.Write(body)
 	_, err := response.writer.Write(body)
 	return err
+}
+
+func (response *Response) Body() []byte {
+	return response.body.Bytes()
+}
+
+func (response *Response) BodyString() string {
+	return response.body.String()
 }
 
 func (response *Response) String(body string) error {
