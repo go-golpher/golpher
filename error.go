@@ -38,5 +38,4 @@ func defaultErrorHandler(ctx *Context, err error) {
 			log.Println(jsonErr)
 		}
 	}
-	return
 }

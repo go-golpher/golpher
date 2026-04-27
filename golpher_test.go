@@ -674,8 +674,8 @@ func TestRequestRawHeadersQueryAndMissingParam(t *testing.T) {
 
 func TestContextNewErrorAndErrorString(t *testing.T) {
 	err := (&Context{}).NewError(http.StatusConflict, "conflict")
-	apiErr, ok := err.(ErrorGolpher)
-	if !ok {
+	var apiErr ErrorGolpher
+	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected ErrorGolpher, got %T", err)
 	}
 	if apiErr.Code != http.StatusConflict || apiErr.Error() != "conflict" {
@@ -795,7 +795,11 @@ func TestTLSServerNegotiatesHTTP2WhenSupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected GET error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("unexpected response body close error: %v", err)
+		}
+	}()
 
 	if resp.ProtoMajor != 2 {
 		t.Fatalf("expected HTTP/2, got %s", resp.Proto)

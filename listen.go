@@ -18,7 +18,7 @@ var figletGolpher = `
 
 func (app *App) Listen(configs ...ListenConfig) {
 	port := fmt.Sprintf(":%v", app.Config.Port)
-	log.Println(fmt.Sprintf(figletGolpher, version, port))
+	log.Printf(figletGolpher, version, port)
 	if err := app.Server(port).ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
