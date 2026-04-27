@@ -43,9 +43,13 @@ if err := app.Shutdown(ctx, srv); err != nil {
 
 HTTP/2 is handled by Go's standard `net/http` server when TLS/ALPN is configured. Golpher does not need a custom transport for this.
 
+Use ordinary Go TLS configuration on `http.Server` when deploying HTTP/2.
+
 ## HTTP/3
 
 HTTP/3 is intentionally not part of the core package. The core remains `http.Handler`-first so an optional QUIC/HTTP3 adapter can be introduced later without forcing every user to depend on it.
+
+The core package should remain transport-agnostic. Any HTTP/3 support should live behind an optional adapter.
 
 ## Performance posture
 

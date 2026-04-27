@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAppImplementsHTTPHandler(t *testing.T) {
@@ -54,6 +55,77 @@ func TestAppPOSTRegistersRouteAndDispatchesHandler(t *testing.T) {
 	}
 	if strings.TrimSpace(rec.Body.String()) != "created" {
 		t.Fatalf("expected body created, got %q", rec.Body.String())
+	}
+}
+
+func TestAppMethodHelpersRegisterRoutes(t *testing.T) {
+	app := New()
+	app.PUT("/items/:id", func(req *Request, res *Response) error {
+		return res.Status(http.StatusOK).String("put:" + req.Param("id"))
+	})
+	app.PATCH("/items/:id", func(req *Request, res *Response) error {
+		return res.Status(http.StatusOK).String("patch:" + req.Param("id"))
+	})
+	app.DELETE("/items/:id", func(req *Request, res *Response) error {
+		return res.Status(http.StatusOK).String("delete:" + req.Param("id"))
+	})
+
+	cases := []struct {
+		method string
+		want   string
+	}{
+		{method: http.MethodPut, want: "put:9"},
+		{method: http.MethodPatch, want: "patch:9"},
+		{method: http.MethodDelete, want: "delete:9"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, httptest.NewRequest(tc.method, "/items/9", nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+			}
+			if strings.TrimSpace(rec.Body.String()) != tc.want {
+				t.Fatalf("expected body %q, got %q", tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAppServerUsesConfiguredTimeouts(t *testing.T) {
+	app := New(AppConfig{
+		ReadHeaderTimeout: time.Second,
+		ReadTimeout:       2 * time.Second,
+		WriteTimeout:      3 * time.Second,
+		IdleTimeout:       4 * time.Second,
+		MaxHeaderBytes:    1024,
+	})
+
+	server := app.Server(":9090")
+
+	if server.Addr != ":9090" {
+		t.Fatalf("expected addr :9090, got %q", server.Addr)
+	}
+	if server.Handler != app {
+		t.Fatal("expected server handler to be the app")
+	}
+	if server.ReadHeaderTimeout != time.Second || server.ReadTimeout != 2*time.Second || server.WriteTimeout != 3*time.Second || server.IdleTimeout != 4*time.Second {
+		t.Fatalf("expected configured timeouts, got %#v", server)
+	}
+	if server.MaxHeaderBytes != 1024 {
+		t.Fatalf("expected MaxHeaderBytes 1024, got %d", server.MaxHeaderBytes)
+	}
+}
+
+func TestAppShutdownDelegatesToHTTPServer(t *testing.T) {
+	app := New()
+	server := httptest.NewServer(app)
+	server.Close()
+
+	if err := app.Shutdown(context.Background(), server.Config); err != nil {
+		t.Fatalf("expected shutdown to succeed for closed test server, got %v", err)
 	}
 }
 
@@ -193,6 +265,24 @@ func TestAppMountsStandardHTTPHandler(t *testing.T) {
 	}
 }
 
+func TestAppMountsStandardHTTPHandlerFunc(t *testing.T) {
+	app := New()
+	app.Handle(http.MethodGet, "/mounted-func", FromHTTPHandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("mounted-func"))
+	}))
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/mounted-func", nil))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+	if rec.Body.String() != "mounted-func" {
+		t.Fatalf("expected mounted-func body, got %q", rec.Body.String())
+	}
+}
+
 func TestGroupRegistersRoutesWithPrefixAndMiddleware(t *testing.T) {
 	app := New()
 	api := app.Group("/api", func(next HandlerFunc) HandlerFunc {
@@ -216,6 +306,77 @@ func TestGroupRegistersRoutesWithPrefixAndMiddleware(t *testing.T) {
 	}
 	if strings.TrimSpace(rec.Body.String()) != "7" {
 		t.Fatalf("expected param 7, got %q", rec.Body.String())
+	}
+}
+
+func TestGroupUseAndMethodHelpers(t *testing.T) {
+	app := New()
+	api := app.Group("/api")
+	api.Use(func(next HandlerFunc) HandlerFunc {
+		return func(req *Request, res *Response) error {
+			res.Header().Set("X-Group-Use", "ok")
+			return next(req, res)
+		}
+	})
+
+	api.POST("/items", func(_ *Request, res *Response) error {
+		return res.Status(http.StatusCreated).String("post")
+	})
+	api.PUT("/items/:id", func(req *Request, res *Response) error {
+		return res.String("put:" + req.Param("id"))
+	})
+	api.PATCH("/items/:id", func(req *Request, res *Response) error {
+		return res.String("patch:" + req.Param("id"))
+	})
+	api.DELETE("/items/:id", func(req *Request, res *Response) error {
+		return res.String("delete:" + req.Param("id"))
+	})
+
+	cases := []struct {
+		method string
+		path   string
+		status int
+		body   string
+	}{
+		{method: http.MethodPost, path: "/api/items", status: http.StatusCreated, body: "post"},
+		{method: http.MethodPut, path: "/api/items/1", status: http.StatusOK, body: "put:1"},
+		{method: http.MethodPatch, path: "/api/items/1", status: http.StatusOK, body: "patch:1"},
+		{method: http.MethodDelete, path: "/api/items/1", status: http.StatusOK, body: "delete:1"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+
+			if rec.Code != tc.status {
+				t.Fatalf("expected status %d, got %d", tc.status, rec.Code)
+			}
+			if rec.Header().Get("X-Group-Use") != "ok" {
+				t.Fatal("expected group Use middleware header")
+			}
+			if strings.TrimSpace(rec.Body.String()) != tc.body {
+				t.Fatalf("expected body %q, got %q", tc.body, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRootGroupRegistersRootPath(t *testing.T) {
+	app := New()
+	root := app.Group("/")
+	root.GET("/", func(_ *Request, res *Response) error {
+		return res.String("root")
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "root" {
+		t.Fatalf("expected root body, got %q", rec.Body.String())
 	}
 }
 
@@ -288,6 +449,27 @@ func TestBodyLimitKeepsAllowedBodyReadable(t *testing.T) {
 	}
 }
 
+func TestBodyLimitReturnsReadError(t *testing.T) {
+	expectedErr := errors.New("body read failed")
+	app := New()
+	app.Use(BodyLimit(16))
+	app.POST("/payload", func(_ *Request, res *Response) error {
+		return res.String("unreachable")
+	})
+
+	httpReq := httptest.NewRequest(http.MethodPost, "/payload", nil)
+	httpReq.Body = failingReadCloser{err: expectedErr}
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), expectedErr.Error()) {
+		t.Fatalf("expected read error in default error response, got %q", rec.Body.String())
+	}
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -350,6 +532,20 @@ func TestResponseStatusThenJSONWritesStatusAndContentType(t *testing.T) {
 	}
 }
 
+func TestResponseRawExposesUnderlyingWriter(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := &Response{writer: rec}
+
+	if res.Raw() != rec {
+		t.Fatal("expected raw response writer")
+	}
+
+	res.Header().Set("X-Raw", "ok")
+	if got := rec.Header().Get("X-Raw"); got != "ok" {
+		t.Fatalf("expected raw header ok, got %q", got)
+	}
+}
+
 func TestResponseSendStoresBodySnapshot(t *testing.T) {
 	rec := httptest.NewRecorder()
 	res := &Response{writer: rec}
@@ -384,6 +580,25 @@ func TestResponseStatusThenXMLWritesStatusAndContentType(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/xml" {
 		t.Fatalf("expected content-type application/xml, got %q", got)
+	}
+}
+
+func TestResponseRedirectWritesLocationStatusAndBody(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := &Response{writer: rec}
+
+	if err := res.Redirect("/target", http.StatusTemporaryRedirect); err != nil {
+		t.Fatalf("unexpected redirect error: %v", err)
+	}
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected status %d, got %d", http.StatusTemporaryRedirect, rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/target" {
+		t.Fatalf("expected location /target, got %q", got)
+	}
+	if !strings.Contains(res.BodyString(), "/target") {
+		t.Fatalf("expected redirect body snapshot to mention target, got %q", res.BodyString())
 	}
 }
 
@@ -438,6 +653,99 @@ func TestRequestContextExposesNativeContext(t *testing.T) {
 	}
 }
 
+func TestRequestRawHeadersQueryAndMissingParam(t *testing.T) {
+	httpReq := httptest.NewRequest(http.MethodGet, "/search?q=golpher", nil)
+	httpReq.Header.Set("X-Test", "ok")
+	req := &Request{http: httpReq}
+
+	if req.Raw() != httpReq {
+		t.Fatal("expected raw http request")
+	}
+	if req.Headers()["X-Test"][0] != "ok" {
+		t.Fatalf("expected header ok, got %#v", req.Headers())
+	}
+	if req.Query("q") != "golpher" {
+		t.Fatalf("expected query golpher, got %q", req.Query("q"))
+	}
+	if req.Param("missing") != "" {
+		t.Fatalf("expected missing param to be empty, got %q", req.Param("missing"))
+	}
+}
+
+func TestContextNewErrorAndErrorString(t *testing.T) {
+	err := (&Context{}).NewError(http.StatusConflict, "conflict")
+	var apiErr ErrorGolpher
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected ErrorGolpher, got %T", err)
+	}
+	if apiErr.Code != http.StatusConflict || apiErr.Error() != "conflict" {
+		t.Fatalf("unexpected error payload: %#v", apiErr)
+	}
+}
+
+func TestDefaultErrorHandlerWritesErrorGolpherJSON(t *testing.T) {
+	app := New()
+	app.GET("/conflict", func(req *Request, _ *Response) error {
+		return req.NewError(http.StatusConflict, "conflict")
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/conflict", nil))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d", http.StatusConflict, rec.Code)
+	}
+	var payload ErrorGolpher
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected error JSON: %v", err)
+	}
+	if payload.Code != http.StatusConflict || payload.Message != "conflict" {
+		t.Fatalf("unexpected error payload: %#v", payload)
+	}
+}
+
+func TestDefaultErrorHandlerWritesGenericInternalServerError(t *testing.T) {
+	app := New()
+	app.GET("/boom", func(_ *Request, _ *Response) error {
+		return errors.New("boom")
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	var payload ErrorGolpher
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected error JSON: %v", err)
+	}
+	if payload.Code != http.StatusInternalServerError || payload.Message != "boom" {
+		t.Fatalf("unexpected error payload: %#v", payload)
+	}
+}
+
+func TestCustomErrorHandlerOverridesDefaultBehavior(t *testing.T) {
+	app := New(AppConfig{
+		ErrorHandler: func(ctx *Context, _ error) {
+			_ = ctx.Response.Status(http.StatusBadGateway).JSON(map[string]string{"error": "masked"})
+		},
+	})
+	app.GET("/custom-error", func(_ *Request, _ *Response) error {
+		return errors.New("internal detail")
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/custom-error", nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "internal detail") {
+		t.Fatalf("expected custom handler to mask internal detail, got %q", rec.Body.String())
+	}
+}
+
 func TestRequestContextCanBeCancelled(t *testing.T) {
 	nativeCtx, cancel := context.WithCancel(context.Background())
 	httpReq := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(nativeCtx)
@@ -487,7 +795,11 @@ func TestTLSServerNegotiatesHTTP2WhenSupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected GET error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("unexpected response body close error: %v", err)
+		}
+	}()
 
 	if resp.ProtoMajor != 2 {
 		t.Fatalf("expected HTTP/2, got %s", resp.Proto)
