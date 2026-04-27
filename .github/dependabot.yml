@@ -21,3 +21,7 @@ updates:
     commit-message:
       prefix: ci
       include: scope
+    ignore:
+      - dependency-name: golangci/golangci-lint-action
+        update-types:
+          - version-update:semver-major

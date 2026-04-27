@@ -42,7 +42,7 @@ jobs:
 
       - name: Lint
         if: matrix.os == 'ubuntu-latest' && matrix.go == '1.23.x'
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64.8
           args: --timeout=5m
