@@ -63,3 +63,13 @@ GitHub Actions currently run:
 Dependabot keeps Go module metadata and GitHub Actions dependencies up to date.
 
 Commit linting is local-only through `.githooks/commit-msg`; there is no GitHub Actions workflow for commit lint.
+
+## Documentation standards
+
+Documentation should be:
+
+- task-oriented;
+- example-driven;
+- explicit about contracts and edge cases;
+- aligned with `net/http` terminology;
+- clear about what belongs in the core package and what should remain an adapter.

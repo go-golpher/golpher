@@ -2,6 +2,13 @@
 
 Golpher is a small HTTP framework for Go that keeps `net/http` as its foundation.
 
+## Contract
+
+- `*golpher.App` implements `http.Handler`.
+- Handlers receive `*golpher.Request` and `*golpher.Response` wrappers.
+- Handlers return `error`; returned errors are handled centrally.
+- The original `*http.Request.Context()` is preserved.
+
 ## Install
 
 ```bash
@@ -25,6 +32,24 @@ app.GET("/hello", func(req *golpher.Request, res *golpher.Response) error {
 ```
 
 Handlers return `error`. This lets Golpher centralize error handling while keeping handler code short.
+
+## Add middleware
+
+```go
+app.Use(golpher.Recover())
+app.Use(golpher.BodyLimit(2 << 20))
+```
+
+Use `UseHTTP` for existing standard-library middleware.
+
+```go
+app.UseHTTP(func(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Service", "golpher")
+		next.ServeHTTP(w, r)
+	})
+})
+```
 
 ## Start a server
 

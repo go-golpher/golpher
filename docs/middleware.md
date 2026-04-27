@@ -17,6 +17,8 @@ app.Use(func(next golpher.HandlerFunc) golpher.HandlerFunc {
 })
 ```
 
+Execution order is the same as registration order. Code before `next` runs from first to last; code after `next` unwinds from last to first.
+
 ## Group middleware
 
 ```go
@@ -64,3 +66,5 @@ Use `UseHTTP` for existing `net/http` middleware.
 ```go
 app.UseHTTP(existingMiddleware)
 ```
+
+Errors returned by Golpher handlers are written inside the standard middleware chain, so status-capturing middleware can observe error responses.

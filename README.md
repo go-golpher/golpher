@@ -83,10 +83,14 @@ app.Handle(http.MethodGet, "/healthz", golpher.FromHTTPHandler(
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
+- [Principles and architecture](docs/principles.md)
 - [Routing](docs/routing.md)
 - [Middleware](docs/middleware.md)
+- [Request and response](docs/request-response.md)
+- [Error handling](docs/error-handling.md)
 - [Interoperability with net/http](docs/interoperability.md)
 - [Deployment and protocols](docs/deployment.md)
+- [Testing](docs/testing.md)
 - [Quality](docs/quality.md)
 
 ## Star History

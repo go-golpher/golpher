@@ -16,6 +16,12 @@ app.DELETE("/users/:id", deleteUser)
 
 Use `:name` in the route pattern and `req.Param(name)` in the handler.
 
+Contract:
+
+- Params are matched by segment.
+- Missing params return an empty string.
+- Static segments must match exactly.
+
 ```go
 app.GET("/users/:id", func(req *golpher.Request, res *golpher.Response) error {
 	return res.JSON(map[string]string{"id": req.Param("id")})
@@ -40,6 +46,8 @@ api.GET("/health", func(req *golpher.Request, res *golpher.Response) error {
 	return res.String("ok")
 })
 ```
+
+Group middleware runs after global middleware and before route-specific middleware.
 
 ## 404 and 405
 

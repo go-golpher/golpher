@@ -44,3 +44,11 @@ rawWriter := res.Raw()
 ```
 
 Use raw access when integrating with libraries that require the standard Go types directly.
+
+## Compatibility invariants
+
+- `req.Raw()` returns the original `*http.Request`.
+- `res.Raw()` returns the underlying `http.ResponseWriter`.
+- `req.Context()` returns the original request context.
+- `UseHTTP` accepts middleware shaped as `func(http.Handler) http.Handler`.
+- `FromHTTPHandler` mounts existing handlers without requiring rewrites.
