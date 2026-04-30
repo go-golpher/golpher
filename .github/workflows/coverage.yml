@@ -33,7 +33,25 @@ jobs:
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: Show coverage
-        run: go tool cover -func=coverage.out
+        run: |
+          go tool cover -func=coverage.out
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')"
+          {
+            echo "## Coverage"
+            echo
+            echo "Total coverage: **${total}**"
+            echo
+            echo '```text'
+            go tool cover -func=coverage.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: golpher-coverage
+          path: coverage.out
+          if-no-files-found: error
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6

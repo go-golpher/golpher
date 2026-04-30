@@ -653,6 +653,15 @@ func TestRequestContextExposesNativeContext(t *testing.T) {
 	}
 }
 
+func TestRequestSetContextUpdatesNativeContext(t *testing.T) {
+	req := &Request{http: httptest.NewRequest(http.MethodGet, "/", nil)}
+	req.SetContext(context.WithValue(req.Context(), contextKey("golpher-user"), "user-1"))
+
+	if req.Context().Value(contextKey("golpher-user")) != "user-1" {
+		t.Fatal("expected request wrapper to expose updated native request context")
+	}
+}
+
 func TestRequestRawHeadersQueryAndMissingParam(t *testing.T) {
 	httpReq := httptest.NewRequest(http.MethodGet, "/search?q=golpher", nil)
 	httpReq.Header.Set("X-Test", "ok")
