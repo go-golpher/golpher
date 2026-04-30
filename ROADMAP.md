@@ -13,11 +13,14 @@
 
 ## Next
 
+- Path-scoped middleware
+- Nested route groups
+- Matched route pattern metadata for observability
 - Route wildcard support tests and docs
+- First-party logging/request ID/CORS middleware
 - Response writer commit tracking
 - Streaming helpers while preserving `http.Flusher`
 - More response helpers: file, download, HTML
 - Request binding helpers for JSON, XML, form, headers and params
-- First-party logging/request ID middleware
 - Benchmarks against Gin, Fiber, Chi and Zinc
 - Optional HTTP/3 adapter investigation

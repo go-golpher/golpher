@@ -5,11 +5,13 @@
 [![Coverage][coverage-shield]][coverage-url]
 [![codecov][codecov-shield]][codecov-url]
 [![Govulncheck][govulncheck-shield]][govulncheck-url]
-[![Snyk][snyk-shield]][snyk-url]
 [![Go Reference][goref-shield]][goref-url]
 [![Go Report Card][goreport-shield]][goreport-url]
 [![MIT License][license-shield]][license-url]
 [![Issues][issues-shield]][issues-url]
+
+> [!WARNING]
+> Golpher has not reached a stable release yet. For production applications today, we recommend using one of the mature frameworks that inspire this project, such as [Fiber](https://github.com/gofiber/fiber), [Gin](https://github.com/gin-gonic/gin), or the Go standard library directly with [`net/http`](https://pkg.go.dev/net/http).
 
 <!-- PROJECT LOGO -->
 <br />
@@ -92,9 +94,6 @@ Golpher is built for applications that need framework convenience while remainin
 ### Status
 
 Golpher is early-stage. The core API is being shaped through spec-driven development and TDD. Expect rapid iteration before a stable `v1`.
-
-> [!WARNING]
-> Golpher has not reached a stable release yet. For production applications today, we recommend using one of the mature frameworks that inspire this project, such as [Fiber](https://github.com/gofiber/fiber), [Gin](https://github.com/gin-gonic/gin), or the Go standard library directly with [`net/http`](https://pkg.go.dev/net/http).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -208,21 +207,7 @@ For more examples, see the [Documentation](#documentation).
 <!-- ROADMAP -->
 ## Roadmap
 
-- [x] `http.Handler` compatible app
-- [x] Express/Fiber-like method helpers
-- [x] Middleware chain
-- [x] Route groups
-- [x] Path params
-- [x] `net/http` middleware interop
-- [x] `Recover` and `BodyLimit`
-- [x] HTTP/2 compatibility through `net/http`
-- [ ] Path-scoped middleware
-- [ ] Nested route groups
-- [ ] Matched route pattern metadata for observability
-- [ ] Complete wildcard routing behavior
-- [ ] First-party request ID, logger, and CORS middleware
-
-See the [open issues][issues-url] for a full list of proposed features and known issues.
+See [ROADMAP.md](ROADMAP.md) for planned work and [open issues][issues-url] for proposed features and known issues.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -235,7 +220,7 @@ If you have a suggestion that would make Golpher better, please fork the reposit
 
 1. Fork the project.
 2. Create your feature branch (`git checkout -b feature/amazing-feature`).
-3. Commit your changes (`git commit -m 'Add amazing feature'`).
+3. Commit your changes using [Conventional Commits](https://www.conventionalcommits.org/) (`git commit -m 'feat: add amazing feature'`).
 4. Push to the branch (`git push origin feature/amazing-feature`).
 5. Open a pull request.
 
@@ -274,8 +259,6 @@ Project Link: [https://github.com/go-golpher/golpher][project-url]
 [codecov-url]: https://codecov.io/gh/go-golpher/golpher
 [govulncheck-shield]: https://github.com/go-golpher/golpher/actions/workflows/govulncheck.yml/badge.svg
 [govulncheck-url]: https://github.com/go-golpher/golpher/actions/workflows/govulncheck.yml
-[snyk-shield]: https://github.com/go-golpher/golpher/actions/workflows/snyk.yml/badge.svg
-[snyk-url]: https://github.com/go-golpher/golpher/actions/workflows/snyk.yml
 [goref-shield]: https://pkg.go.dev/badge/github.com/go-golpher/golpher.svg
 [goref-url]: https://pkg.go.dev/github.com/go-golpher/golpher
 [goreport-shield]: https://goreportcard.com/badge/github.com/go-golpher/golpher

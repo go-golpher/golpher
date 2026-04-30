@@ -47,19 +47,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v4
         with:
           name: golpher-coverage
           path: coverage.out
           if-no-files-found: error
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6.0.0
+        uses: codecov/codecov-action@v6
         with:
           files: coverage.out
           flags: unit
           name: golpher-go-coverage
-          fail_ci_if_error: true
-          use_oidc: true
-          version: v11.2.8
-          verbose: true
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
