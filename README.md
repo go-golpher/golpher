@@ -54,6 +54,7 @@
     <li><a href="#usage">Usage</a></li>
     <li><a href="#documentation">Documentation</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#star-history">Star History</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
@@ -208,6 +209,13 @@ For more examples, see the [Documentation](#documentation).
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for planned work and [open issues][issues-url] for proposed features and known issues.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- STAR HISTORY -->
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=go-golpher/golpher&type=Date&theme=dark)](https://star-history.com/#go-golpher/golpher&Date)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
