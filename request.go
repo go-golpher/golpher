@@ -31,6 +31,10 @@ func (request *Request) Context() context.Context {
 	return request.http.Context()
 }
 
+func (request *Request) SetContext(ctx context.Context) {
+	request.http = request.http.WithContext(ctx)
+}
+
 func (request *Request) Param(name string) string {
 	if request.params == nil {
 		return ""
