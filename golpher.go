@@ -62,6 +62,7 @@ func (app *App) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (app *App) Use(middlewares ...MiddlewareFunc) {
 	app.middlewares = append(app.middlewares, middlewares...)
+	app.Router.rebuildHandlers()
 }
 
 func (app *App) UseHTTP(middlewares ...func(http.Handler) http.Handler) {

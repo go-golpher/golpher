@@ -15,8 +15,9 @@ type Request struct {
 }
 
 type Body struct {
-	bytes []byte
-	error error
+	bytes  []byte
+	error  error
+	loaded bool
 }
 
 func (request *Request) Headers() map[string][]string {
@@ -51,15 +52,24 @@ func (request *Request) NewError(status int, err string) error {
 }
 
 func (request *Request) Body() *Body {
-	if request.body != nil {
+	if request.body != nil && request.body.loaded {
 		return request.body
 	}
 	data, err := io.ReadAll(request.http.Body)
+	body := request.body
+	if body == nil {
+		body = &Body{}
+		request.body = body
+	}
 	if err != nil {
-		request.body = &Body{error: err}
+		body.bytes = nil
+		body.error = err
+		body.loaded = true
 		return request.body
 	}
-	request.body = &Body{bytes: data}
+	body.bytes = data
+	body.error = nil
+	body.loaded = true
 	return request.body
 }
 
