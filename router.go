@@ -25,7 +25,6 @@ type route struct {
 	static          bool
 	handler         HandlerFunc
 	middlewares     []MiddlewareFunc
-	routeHandler    HandlerFunc
 	compiledHandler HandlerFunc
 }
 
@@ -149,14 +148,14 @@ func isStaticPattern(pattern string) bool {
 }
 
 func (r *route) rebuildHandler(appMiddlewares []MiddlewareFunc) {
-	r.routeHandler = r.handler
+	handler := r.handler
 	if len(r.middlewares) > 0 {
-		r.routeHandler = chain(r.handler, r.middlewares...)
+		handler = chain(handler, r.middlewares...)
 	}
-	r.compiledHandler = r.routeHandler
 	if len(appMiddlewares) > 0 {
-		r.compiledHandler = chain(r.routeHandler, appMiddlewares...)
+		handler = chain(handler, appMiddlewares...)
 	}
+	r.compiledHandler = handler
 }
 
 func (r *Router) rebuildHandlers() {
