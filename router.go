@@ -1,6 +1,7 @@
 package golpher
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"sync"
@@ -9,29 +10,37 @@ import (
 var requestPool = sync.Pool{New: func() any { return new(Request) }}
 var responsePool = sync.Pool{New: func() any { return new(Response) }}
 
+const maxPooledResponseBufferCapacity = 64 * 1024
+
 type Router struct {
 	app    *App
 	routes []route
 }
 
 type route struct {
-	method      string
-	pattern     string
-	segments    []string
-	static      bool
-	handler     HandlerFunc
-	middlewares []MiddlewareFunc
+	method          string
+	pattern         string
+	trimmedPattern  string
+	segments        []string
+	static          bool
+	handler         HandlerFunc
+	middlewares     []MiddlewareFunc
+	routeHandler    HandlerFunc
+	compiledHandler HandlerFunc
 }
 
 func (r *Router) handle(method, pattern string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
-	r.routes = append(r.routes, route{
-		method:      method,
-		pattern:     pattern,
-		segments:    splitPath(pattern),
-		static:      isStaticPattern(pattern),
-		handler:     handler,
-		middlewares: append([]MiddlewareFunc(nil), middlewares...),
-	})
+	newRoute := route{
+		method:         method,
+		pattern:        pattern,
+		trimmedPattern: strings.Trim(pattern, "/"),
+		segments:       splitPath(pattern),
+		static:         isStaticPattern(pattern),
+		handler:        handler,
+		middlewares:    append([]MiddlewareFunc(nil), middlewares...),
+	}
+	newRoute.rebuildHandler(r.app.middlewares)
+	r.routes = append(r.routes, newRoute)
 }
 
 func (r *Router) GET(pattern string, handler HandlerFunc) {
@@ -58,9 +67,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	response := acquireResponse(w)
 	defer releaseResponse(response)
 	var methodMismatch bool
+	trimmedPath := strings.Trim(req.URL.Path, "/")
 
 	for _, route := range r.routes {
-		params, ok := route.match(req.URL.Path)
+		params, ok := route.match(req.URL.Path, trimmedPath)
 		if !ok {
 			continue
 		}
@@ -71,10 +81,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 		request := acquireRequest(req, params)
 		defer releaseRequest(request)
-		handler := route.handler
-		if len(r.app.middlewares) > 0 || len(route.middlewares) > 0 {
-			handler = chain(route.handler, append(append([]MiddlewareFunc(nil), r.app.middlewares...), route.middlewares...)...)
-		}
+		handler := route.compiledHandler
 		if err := handler(request, response); err != nil {
 			ctx := &Context{Request: request, Response: response}
 			r.app.ErrorHandler(ctx, err)
@@ -86,26 +93,26 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer releaseRequest(request)
 	ctx := &Context{Request: request, Response: response}
 	if methodMismatch {
-		response.Header().Set("Allow", r.allowedMethods(req.URL.Path))
+		response.Header().Set("Allow", r.allowedMethods(req.URL.Path, trimmedPath))
 		r.app.ErrorHandler(ctx, ErrorGolpher{Code: http.StatusMethodNotAllowed, Message: "Method Not Allowed"})
 		return
 	}
 	r.app.ErrorHandler(ctx, ErrorGolpher{Code: http.StatusNotFound, Message: "Not Found"})
 }
 
-func (r *Router) allowedMethods(path string) string {
+func (r *Router) allowedMethods(path, trimmedPath string) string {
 	methods := make([]string, 0)
 	for _, route := range r.routes {
-		if _, ok := route.match(path); ok {
+		if _, ok := route.match(path, trimmedPath); ok {
 			methods = append(methods, route.method)
 		}
 	}
 	return strings.Join(methods, ", ")
 }
 
-func (r route) match(path string) (map[string]string, bool) {
+func (r route) match(path, trimmedPath string) (map[string]string, bool) {
 	if r.static {
-		return nil, r.pattern == path || strings.Trim(r.pattern, "/") == strings.Trim(path, "/")
+		return nil, r.pattern == path || r.trimmedPattern == trimmedPath
 	}
 
 	pathSegments := splitPath(path)
@@ -141,11 +148,33 @@ func isStaticPattern(pattern string) bool {
 	return !strings.ContainsAny(pattern, ":*")
 }
 
+func (r *route) rebuildHandler(appMiddlewares []MiddlewareFunc) {
+	r.routeHandler = r.handler
+	if len(r.middlewares) > 0 {
+		r.routeHandler = chain(r.handler, r.middlewares...)
+	}
+	r.compiledHandler = r.routeHandler
+	if len(appMiddlewares) > 0 {
+		r.compiledHandler = chain(r.routeHandler, appMiddlewares...)
+	}
+}
+
+func (r *Router) rebuildHandlers() {
+	for i := range r.routes {
+		r.routes[i].rebuildHandler(r.app.middlewares)
+	}
+}
+
 func acquireRequest(req *http.Request, params map[string]string) *Request {
 	request := requestPool.Get().(*Request)
 	request.http = req
 	request.params = params
-	request.body = nil
+	if request.body == nil {
+		request.body = &Body{}
+	}
+	request.body.bytes = nil
+	request.body.error = nil
+	request.body.loaded = false
 	return request
 }
 
@@ -156,10 +185,10 @@ func releaseRequest(request *Request) {
 	if request.body != nil {
 		request.body.bytes = nil
 		request.body.error = nil
+		request.body.loaded = false
 	}
 	request.http = nil
 	request.params = nil
-	request.body = nil
 	requestPool.Put(request)
 }
 
@@ -177,7 +206,11 @@ func releaseResponse(response *Response) {
 	}
 	response.writer = nil
 	response.statusCode = 0
-	response.body.Reset()
+	if response.body.Cap() > maxPooledResponseBufferCapacity {
+		response.body = bytes.Buffer{}
+	} else {
+		response.body.Reset()
+	}
 	responsePool.Put(response)
 }
 

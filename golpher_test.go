@@ -579,6 +579,144 @@ func TestResponseSendStoresBodySnapshot(t *testing.T) {
 	}
 }
 
+func TestPooledRequestReusesBodyWrapperAndClearsState(t *testing.T) {
+	firstHTTPReq := httptest.NewRequest(http.MethodPost, "/items/1?query=old", strings.NewReader("first"))
+	firstReq := acquireRequest(firstHTTPReq, map[string]string{"id": "1"})
+	firstBody := firstReq.Body()
+
+	if firstReq.Param("id") != "1" || string(firstBody.Bytes()) != "first" {
+		t.Fatalf("expected first request state to be populated")
+	}
+
+	releaseRequest(firstReq)
+
+	if firstReq.Raw() != nil || firstReq.params != nil {
+		t.Fatalf("expected released request wrapper to clear references, got %#v", firstReq)
+	}
+	if firstReq.body != firstBody {
+		t.Fatal("expected pooled request to keep body wrapper for reuse")
+	}
+	if firstBody.bytes != nil || firstBody.error != nil || firstBody.loaded {
+		t.Fatalf("expected released body wrapper to clear state, got bytes=%q error=%v loaded=%v", string(firstBody.bytes), firstBody.error, firstBody.loaded)
+	}
+
+	secondHTTPReq := httptest.NewRequest(http.MethodPost, "/items/2?query=new", strings.NewReader("second"))
+	secondReq := acquireRequest(secondHTTPReq, nil)
+	defer releaseRequest(secondReq)
+
+	if secondReq.Raw() != secondHTTPReq {
+		t.Fatal("expected second request to expose its own http request")
+	}
+	if secondReq.Param("id") != "" {
+		t.Fatalf("expected pooled request params to be cleared, got %q", secondReq.Param("id"))
+	}
+	if secondReq.Query("query") != "new" {
+		t.Fatalf("expected second request query, got %q", secondReq.Query("query"))
+	}
+	if string(secondReq.Body().Bytes()) != "second" {
+		t.Fatalf("expected second request body, got %q", string(secondReq.Body().Bytes()))
+	}
+}
+
+func TestPooledResponseClearsStateBeforeReuse(t *testing.T) {
+	firstRec := httptest.NewRecorder()
+	firstRes := acquireResponse(firstRec)
+
+	if err := firstRes.Status(http.StatusCreated).String("first"); err != nil {
+		t.Fatalf("unexpected first response error: %v", err)
+	}
+	if firstRes.statusCode != http.StatusCreated || firstRes.BodyString() != "first" {
+		t.Fatalf("expected first response state to be populated")
+	}
+
+	releaseResponse(firstRes)
+
+	if firstRes.writer != nil || firstRes.statusCode != 0 || firstRes.BodyString() != "" {
+		t.Fatalf("expected released response wrapper to clear state, got %#v", firstRes)
+	}
+
+	secondRec := httptest.NewRecorder()
+	secondRes := acquireResponse(secondRec)
+	defer releaseResponse(secondRes)
+
+	if secondRes.Raw() != secondRec {
+		t.Fatal("expected second response to expose its own writer")
+	}
+	if secondRes.statusCode != 0 || secondRes.BodyString() != "" {
+		t.Fatalf("expected pooled response state to be cleared, status=%d body=%q", secondRes.statusCode, secondRes.BodyString())
+	}
+	if err := secondRes.String("second"); err != nil {
+		t.Fatalf("unexpected second response error: %v", err)
+	}
+	if strings.TrimSpace(secondRec.Body.String()) != "second" {
+		t.Fatalf("expected second recorder body, got %q", secondRec.Body.String())
+	}
+}
+
+func TestPooledResponseDropsOversizedBodyBuffer(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := acquireResponse(rec)
+	largeBody := strings.Repeat("x", maxPooledResponseBufferCapacity+1)
+
+	if err := res.String(largeBody); err != nil {
+		t.Fatalf("unexpected response error: %v", err)
+	}
+	if res.body.Cap() <= maxPooledResponseBufferCapacity {
+		t.Fatalf("expected oversized response buffer, got cap %d", res.body.Cap())
+	}
+
+	releaseResponse(res)
+
+	if res.body.Cap() > maxPooledResponseBufferCapacity {
+		t.Fatalf("expected oversized buffer to be dropped, got cap %d", res.body.Cap())
+	}
+}
+
+func TestPooledResponseBodySnapshotAvailableDuringHandler(t *testing.T) {
+	app := New()
+	var snapshot string
+	app.GET("/snapshot", func(_ *Request, res *Response) error {
+		if err := res.String("golpher"); err != nil {
+			return err
+		}
+		snapshot = string(res.Body())
+		return nil
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/snapshot", nil))
+
+	if snapshot != "golpher" {
+		t.Fatalf("expected response body snapshot during handler, got %q", snapshot)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "golpher" {
+		t.Fatalf("expected recorder body golpher, got %q", rec.Body.String())
+	}
+}
+
+func TestMiddlewareRegisteredAfterRouteUsesCompiledChain(t *testing.T) {
+	app := New()
+	app.GET("/late", func(_ *Request, res *Response) error {
+		return res.String("handler")
+	})
+	app.Use(func(next HandlerFunc) HandlerFunc {
+		return func(req *Request, res *Response) error {
+			res.Header().Set("X-Late-Middleware", "ok")
+			return next(req, res)
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/late", nil))
+
+	if rec.Header().Get("X-Late-Middleware") != "ok" {
+		t.Fatal("expected middleware registered after route to run")
+	}
+	if strings.TrimSpace(rec.Body.String()) != "handler" {
+		t.Fatalf("expected handler response, got %q", rec.Body.String())
+	}
+}
+
 func TestResponseStatusThenXMLWritesStatusAndContentType(t *testing.T) {
 	rec := httptest.NewRecorder()
 	res := &Response{writer: rec}
