@@ -202,6 +202,23 @@ func TestRouterSupportsPathParams(t *testing.T) {
 	}
 }
 
+func TestStaticRouteFastPathPreservesTrailingSlashCompatibility(t *testing.T) {
+	app := New()
+	app.GET("/hello", func(_ *Request, res *Response) error {
+		return res.Status(http.StatusOK).String("hello")
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/hello/", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "hello" {
+		t.Fatalf("expected static route response hello, got %q", rec.Body.String())
+	}
+}
+
 func TestAppWrapsStandardHTTPMiddleware(t *testing.T) {
 	app := New()
 	app.UseHTTP(func(next http.Handler) http.Handler {

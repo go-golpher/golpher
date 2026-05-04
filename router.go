@@ -3,7 +3,11 @@ package golpher
 import (
 	"net/http"
 	"strings"
+	"sync"
 )
+
+var requestPool = sync.Pool{New: func() any { return new(Request) }}
+var responsePool = sync.Pool{New: func() any { return new(Response) }}
 
 type Router struct {
 	app    *App
@@ -14,6 +18,7 @@ type route struct {
 	method      string
 	pattern     string
 	segments    []string
+	static      bool
 	handler     HandlerFunc
 	middlewares []MiddlewareFunc
 }
@@ -23,6 +28,7 @@ func (r *Router) handle(method, pattern string, handler HandlerFunc, middlewares
 		method:      method,
 		pattern:     pattern,
 		segments:    splitPath(pattern),
+		static:      isStaticPattern(pattern),
 		handler:     handler,
 		middlewares: append([]MiddlewareFunc(nil), middlewares...),
 	})
@@ -49,7 +55,8 @@ func (r *Router) PATCH(pattern string, handler HandlerFunc) {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	response := &Response{writer: w}
+	response := acquireResponse(w)
+	defer releaseResponse(response)
 	var methodMismatch bool
 
 	for _, route := range r.routes {
@@ -62,16 +69,21 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			continue
 		}
 
-		request := &Request{http: req, params: params}
-		ctx := &Context{Request: request, Response: response}
-		handler := chain(route.handler, append(append([]MiddlewareFunc(nil), r.app.middlewares...), route.middlewares...)...)
+		request := acquireRequest(req, params)
+		defer releaseRequest(request)
+		handler := route.handler
+		if len(r.app.middlewares) > 0 || len(route.middlewares) > 0 {
+			handler = chain(route.handler, append(append([]MiddlewareFunc(nil), r.app.middlewares...), route.middlewares...)...)
+		}
 		if err := handler(request, response); err != nil {
+			ctx := &Context{Request: request, Response: response}
 			r.app.ErrorHandler(ctx, err)
 		}
 		return
 	}
 
-	request := &Request{http: req}
+	request := acquireRequest(req, nil)
+	defer releaseRequest(request)
 	ctx := &Context{Request: request, Response: response}
 	if methodMismatch {
 		response.Header().Set("Allow", r.allowedMethods(req.URL.Path))
@@ -92,6 +104,10 @@ func (r *Router) allowedMethods(path string) string {
 }
 
 func (r route) match(path string) (map[string]string, bool) {
+	if r.static {
+		return nil, r.pattern == path || strings.Trim(r.pattern, "/") == strings.Trim(path, "/")
+	}
+
 	pathSegments := splitPath(path)
 	if len(r.segments) != len(pathSegments) {
 		return nil, false
@@ -119,6 +135,50 @@ func splitPath(path string) []string {
 		return nil
 	}
 	return strings.Split(path, "/")
+}
+
+func isStaticPattern(pattern string) bool {
+	return !strings.ContainsAny(pattern, ":*")
+}
+
+func acquireRequest(req *http.Request, params map[string]string) *Request {
+	request := requestPool.Get().(*Request)
+	request.http = req
+	request.params = params
+	request.body = nil
+	return request
+}
+
+func releaseRequest(request *Request) {
+	if request == nil {
+		return
+	}
+	if request.body != nil {
+		request.body.bytes = nil
+		request.body.error = nil
+	}
+	request.http = nil
+	request.params = nil
+	request.body = nil
+	requestPool.Put(request)
+}
+
+func acquireResponse(w http.ResponseWriter) *Response {
+	response := responsePool.Get().(*Response)
+	response.writer = w
+	response.statusCode = 0
+	response.body.Reset()
+	return response
+}
+
+func releaseResponse(response *Response) {
+	if response == nil {
+		return
+	}
+	response.writer = nil
+	response.statusCode = 0
+	response.body.Reset()
+	responsePool.Put(response)
 }
 
 func chain(handler HandlerFunc, middlewares ...MiddlewareFunc) HandlerFunc {

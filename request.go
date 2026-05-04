@@ -55,11 +55,18 @@ func (request *Request) Body() *Body {
 		return request.body
 	}
 	data, err := io.ReadAll(request.http.Body)
+	body := request.body
+	if body == nil {
+		body = &Body{}
+		request.body = body
+	}
 	if err != nil {
-		request.body = &Body{error: err}
+		body.bytes = nil
+		body.error = err
 		return request.body
 	}
-	request.body = &Body{bytes: data}
+	body.bytes = data
+	body.error = nil
 	return request.body
 }
 
