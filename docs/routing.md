@@ -12,6 +12,18 @@ app.PATCH("/users/:id", updateUser)
 app.DELETE("/users/:id", deleteUser)
 ```
 
+## Raw handlers
+
+Use `Raw` for latency-sensitive endpoints that should receive the standard library primitives directly:
+
+```go
+app.Raw(http.MethodPost, "/events", func(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusAccepted)
+})
+```
+
+Raw handlers are an explicit fast path. They bypass Golpher `Request`/`Response` wrappers and native Golpher middleware. Standard `net/http` middleware outside the app can still wrap the whole app because Golpher remains an `http.Handler`.
+
 ## Path parameters
 
 Use `:name` in the route pattern and `req.Param(name)` in the handler.

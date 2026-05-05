@@ -21,6 +21,12 @@ type AppConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
+	// DisableResponseBodyCapture skips storing bytes written through Response.Send
+	// and Response.String. It is intended for latency-sensitive services that do
+	// not inspect Response.Body() from middleware or tests.
+	DisableResponseBodyCapture bool
+	// DisableBanner skips the startup banner printed by Listen.
+	DisableBanner bool
 }
 
 func New(configs ...AppConfig) *App {
@@ -73,7 +79,7 @@ func (app *App) UseHTTP(middlewares ...func(http.Handler) http.Handler) {
 				var handlerErr error
 				h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					request := &Request{http: r, params: req.params}
-					response := &Response{writer: w}
+					response := &Response{writer: w, disableBodyCapture: app.Config.DisableResponseBodyCapture}
 					handlerErr = next(request, response)
 					if handlerErr != nil {
 						app.ErrorHandler(&Context{Request: request, Response: response}, handlerErr)
@@ -89,6 +95,10 @@ func (app *App) UseHTTP(middlewares ...func(http.Handler) http.Handler) {
 
 func (app *App) Handle(method, pattern string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
 	app.Router.handle(method, pattern, handler, middlewares...)
+}
+
+func (app *App) Raw(method, pattern string, handler RawHandlerFunc) {
+	app.Router.handleRaw(method, pattern, handler)
 }
 
 func (app *App) GET(pattern string, handler HandlerFunc, middlewares ...MiddlewareFunc) {

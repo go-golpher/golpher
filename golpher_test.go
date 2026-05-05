@@ -1,11 +1,13 @@
 package golpher
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,6 +96,106 @@ func TestAppMethodHelpersRegisterRoutes(t *testing.T) {
 	}
 }
 
+func TestAppRawRegistersRouteAndDispatchesStandardHandler(t *testing.T) {
+	app := New()
+	app.Raw(http.MethodPost, "/raw", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/raw", nil))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("expected content-type application/json, got %q", got)
+	}
+	if rec.Body.String() != `{"ok":true}` {
+		t.Fatalf("expected raw response body, got %q", rec.Body.String())
+	}
+}
+
+func TestRawStaticRoutePreservesEarlierDynamicRoutePrecedence(t *testing.T) {
+	app := New()
+	app.GET("/:id", func(req *Request, res *Response) error {
+		return res.String("dynamic:" + req.Param("id"))
+	})
+	app.Raw(http.MethodGet, "/health", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("raw"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "dynamic:health" {
+		t.Fatalf("expected earlier dynamic route to preserve precedence, got %q", rec.Body.String())
+	}
+}
+
+func TestRawRouteBypassesGolpherMiddleware(t *testing.T) {
+	app := New()
+	var middlewareCalled bool
+	app.Use(func(next HandlerFunc) HandlerFunc {
+		return func(req *Request, res *Response) error {
+			middlewareCalled = true
+			return next(req, res)
+		}
+	})
+	app.Raw(http.MethodGet, "/raw", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("raw"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/raw", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "raw" {
+		t.Fatalf("expected raw body, got %q", rec.Body.String())
+	}
+	if middlewareCalled {
+		t.Fatal("expected raw route to bypass Golpher middleware")
+	}
+}
+
+func TestRawRouteRegisteredBeforeMiddlewareDoesNotBuildNilMiddlewareChain(t *testing.T) {
+	app := New()
+	app.Raw(http.MethodGet, "/raw", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("raw"))
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("expected adding middleware after raw route not to panic, got %v", recovered)
+		}
+	}()
+	app.Use(func(next HandlerFunc) HandlerFunc {
+		if next == nil {
+			panic("nil next")
+		}
+		return func(req *Request, res *Response) error {
+			return next(req, res)
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/raw", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "raw" {
+		t.Fatalf("expected raw body, got %q", rec.Body.String())
+	}
+}
+
 func TestAppServerUsesConfiguredTimeouts(t *testing.T) {
 	app := New(AppConfig{
 		ReadHeaderTimeout: time.Second,
@@ -126,6 +228,52 @@ func TestAppShutdownDelegatesToHTTPServer(t *testing.T) {
 
 	if err := app.Shutdown(context.Background(), server.Config); err != nil {
 		t.Fatalf("expected shutdown to succeed for closed test server, got %v", err)
+	}
+}
+
+func TestAppServeUsesProvidedListener(t *testing.T) {
+	app := New()
+	app.GET("/ready", func(_ *Request, res *Response) error {
+		return res.String("ok")
+	})
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("expected listener: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Serve(listener)
+	}()
+
+	resp, err := http.Get("http://" + listener.Addr().String() + "/ready")
+	if err != nil {
+		t.Fatalf("expected GET through provided listener: %v", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("unexpected response body close error: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil || string(body) != "ok" {
+		t.Fatalf("expected body ok, got %q err=%v", string(body), err)
+	}
+
+	if err := listener.Close(); err != nil {
+		t.Fatalf("expected listener close: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("expected closed listener error, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Serve to return after listener close")
 	}
 }
 
@@ -219,6 +367,26 @@ func TestStaticRouteFastPathPreservesTrailingSlashCompatibility(t *testing.T) {
 	}
 }
 
+func TestStaticRouteFastPathPreservesRegistrationOrderWithEarlierDynamicRoute(t *testing.T) {
+	app := New()
+	app.GET("/:id", func(req *Request, res *Response) error {
+		return res.Status(http.StatusOK).String("dynamic:" + req.Param("id"))
+	})
+	app.GET("/health", func(_ *Request, res *Response) error {
+		return res.Status(http.StatusOK).String("static")
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "dynamic:health" {
+		t.Fatalf("expected earlier dynamic route to preserve precedence, got %q", rec.Body.String())
+	}
+}
+
 func TestAppWrapsStandardHTTPMiddleware(t *testing.T) {
 	app := New()
 	app.UseHTTP(func(next http.Handler) http.Handler {
@@ -261,6 +429,36 @@ func TestUseHTTPMiddlewareObservesGolpherErrorResponse(t *testing.T) {
 	}
 	if observedStatus != http.StatusTeapot {
 		t.Fatalf("expected stdlib middleware to observe status %d, got %d", http.StatusTeapot, observedStatus)
+	}
+}
+
+func TestUseHTTPRespectsDisabledResponseBodyCapture(t *testing.T) {
+	app := New(AppConfig{DisableResponseBodyCapture: true})
+	app.UseHTTP(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+		})
+	})
+	var snapshot string
+	app.GET("/capture", func(_ *Request, res *Response) error {
+		if err := res.String("ok"); err != nil {
+			return err
+		}
+		snapshot = res.BodyString()
+		return nil
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/capture", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "ok" {
+		t.Fatalf("expected response body ok, got %q", rec.Body.String())
+	}
+	if snapshot != "" {
+		t.Fatalf("expected disabled response snapshot through UseHTTP, got %q", snapshot)
 	}
 }
 
@@ -466,6 +664,24 @@ func TestBodyLimitKeepsAllowedBodyReadable(t *testing.T) {
 	}
 }
 
+func TestBodyLimitNegativeLeavesBodyUnlimited(t *testing.T) {
+	app := New()
+	app.Use(BodyLimit(-1))
+	app.POST("/payload", func(req *Request, res *Response) error {
+		return res.Status(http.StatusOK).String(string(req.Body().Bytes()))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader("unlimited")))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "unlimited" {
+		t.Fatalf("expected body unlimited, got %q", rec.Body.String())
+	}
+}
+
 func TestBodyLimitReturnsReadError(t *testing.T) {
 	expectedErr := errors.New("body read failed")
 	app := New()
@@ -549,6 +765,63 @@ func TestResponseStatusThenJSONWritesStatusAndContentType(t *testing.T) {
 	}
 }
 
+func TestResponseJSONBytesWritesPreEncodedJSON(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := &Response{writer: rec}
+
+	if err := res.Status(http.StatusCreated).JSONBytes([]byte(`{"status":"ok"}`)); err != nil {
+		t.Fatalf("unexpected JSONBytes error: %v", err)
+	}
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("expected content-type application/json, got %q", got)
+	}
+	if rec.Body.String() != `{"status":"ok"}` {
+		t.Fatalf("expected pre-encoded JSON body, got %q", rec.Body.String())
+	}
+}
+
+func TestResponseBytesWritesWithoutBodySnapshot(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := &Response{writer: rec}
+
+	if err := res.Bytes(http.StatusAccepted, "application/octet-stream", []byte("payload")); err != nil {
+		t.Fatalf("unexpected Bytes error: %v", err)
+	}
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("expected content-type application/octet-stream, got %q", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "7" {
+		t.Fatalf("expected content-length 7, got %q", got)
+	}
+	if rec.Body.String() != "payload" {
+		t.Fatalf("expected writer body payload, got %q", rec.Body.String())
+	}
+	if res.BodyString() != "" {
+		t.Fatalf("expected Bytes not to capture body snapshot, got %q", res.BodyString())
+	}
+}
+
+func TestResponseBytesUsesPriorStatusWhenStatusArgumentIsZero(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := &Response{writer: rec}
+
+	if err := res.Status(http.StatusAccepted).Bytes(0, "text/plain", []byte("accepted")); err != nil {
+		t.Fatalf("unexpected Bytes error: %v", err)
+	}
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rec.Code)
+	}
+}
+
 func TestResponseRawExposesUnderlyingWriter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	res := &Response{writer: rec}
@@ -576,6 +849,23 @@ func TestResponseSendStoresBodySnapshot(t *testing.T) {
 	}
 	if res.BodyString() != "golpher" {
 		t.Fatalf("expected body string golpher, got %q", res.BodyString())
+	}
+}
+
+func TestResponseBodyCaptureCanBeDisabled(t *testing.T) {
+	rec := httptest.NewRecorder()
+	res := acquireResponse(rec, true)
+	defer releaseResponse(res)
+
+	if err := res.Status(http.StatusOK).Send([]byte("golpher")); err != nil {
+		t.Fatalf("unexpected send error: %v", err)
+	}
+
+	if rec.Body.String() != "golpher" {
+		t.Fatalf("expected writer body golpher, got %q", rec.Body.String())
+	}
+	if res.BodyString() != "" {
+		t.Fatalf("expected disabled response snapshot to stay empty, got %q", res.BodyString())
 	}
 }
 
@@ -988,3 +1278,164 @@ func (f failingReadCloser) Close() error {
 var _ io.ReadCloser = failingReadCloser{}
 
 type contextKey string
+
+type benchmarkResponseWriter struct {
+	header http.Header
+	status int
+	writes int
+}
+
+func (w *benchmarkResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *benchmarkResponseWriter) Write(body []byte) (int, error) {
+	w.writes++
+	return len(body), nil
+}
+
+func (w *benchmarkResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *benchmarkResponseWriter) reset() {
+	w.status = 0
+	w.writes = 0
+	for key := range w.header {
+		delete(w.header, key)
+	}
+}
+
+func BenchmarkStaticRouteRaw(b *testing.B) {
+	app := New()
+	app.Raw(http.MethodGet, "/ready", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w := &benchmarkResponseWriter{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		app.ServeHTTP(w, req)
+	}
+}
+
+func BenchmarkStaticRouteGolpher(b *testing.B) {
+	app := New(AppConfig{DisableResponseBodyCapture: true})
+	app.GET("/ready", func(_ *Request, res *Response) error {
+		return res.String("ok")
+	})
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w := &benchmarkResponseWriter{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		app.ServeHTTP(w, req)
+	}
+}
+
+func BenchmarkDynamicRouteParam(b *testing.B) {
+	app := New(AppConfig{DisableResponseBodyCapture: true})
+	app.GET("/users/:id", func(req *Request, res *Response) error {
+		return res.String(req.Param("id"))
+	})
+	req := httptest.NewRequest(http.MethodGet, "/users/42", nil)
+	w := &benchmarkResponseWriter{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		app.ServeHTTP(w, req)
+	}
+}
+
+func BenchmarkResponseBytes(b *testing.B) {
+	w := &benchmarkResponseWriter{}
+	body := []byte(`{"approved":true,"fraud_score":0}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		res := &Response{writer: w}
+		if err := res.Bytes(http.StatusOK, "application/json", body); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkResponseSend(b *testing.B) {
+	w := &benchmarkResponseWriter{}
+	body := []byte(`{"approved":true,"fraud_score":0}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		res := &Response{writer: w}
+		res.Header().Set("Content-Type", "application/json")
+		if err := res.Status(http.StatusOK).Send(body); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBodyRead(b *testing.B) {
+	body := []byte(`{"id":"tx","transaction":{"amount":1}}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		req := &Request{http: httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))}
+		if len(req.Body().Bytes()) == 0 {
+			b.Fatal("expected body")
+		}
+	}
+}
+
+func BenchmarkBodyLimitThenBody(b *testing.B) {
+	app := New(AppConfig{DisableResponseBodyCapture: true})
+	app.Use(BodyLimit(16 << 10))
+	app.POST("/payload", func(req *Request, res *Response) error {
+		if len(req.Body().Bytes()) == 0 {
+			return req.NewError(http.StatusBadRequest, "empty")
+		}
+		return res.String("ok")
+	})
+	body := []byte(`{"id":"tx","transaction":{"amount":1}}`)
+	w := &benchmarkResponseWriter{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		req := httptest.NewRequest(http.MethodPost, "/payload", bytes.NewReader(body))
+		app.ServeHTTP(w, req)
+	}
+}
+
+func BenchmarkStaticPOSTBodyLimitNoResponseCapture(b *testing.B) {
+	app := New(AppConfig{DisableResponseBodyCapture: true})
+	app.Use(BodyLimit(16 << 10))
+	app.POST("/fraud-score", func(req *Request, res *Response) error {
+		if len(req.Body().Bytes()) == 0 {
+			return req.NewError(http.StatusBadRequest, "empty")
+		}
+		res.Header().Set("Content-Type", "application/json")
+		return res.Status(http.StatusOK).Send([]byte(`{"approved":true,"fraud_score":0}`))
+	})
+
+	body := []byte(`{"id":"tx","transaction":{"amount":1}}`)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/fraud-score", bytes.NewReader(body))
+		app.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			b.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+		}
+	}
+}

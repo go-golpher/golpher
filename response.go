@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 )
 
 type Response struct {
-	body       bytes.Buffer
-	statusCode int
-	writer     http.ResponseWriter
+	body               bytes.Buffer
+	statusCode         int
+	writer             http.ResponseWriter
+	disableBodyCapture bool
 }
 
 func (response *Response) Status(code int) *Response {
@@ -29,7 +32,9 @@ func (response *Response) Header() http.Header {
 
 func (response *Response) Send(body []byte) error {
 	response.writeStatus()
-	response.body.Write(body)
+	if !response.disableBodyCapture {
+		response.body.Write(body)
+	}
 	_, err := response.writer.Write(body)
 	return err
 }
@@ -44,13 +49,36 @@ func (response *Response) BodyString() string {
 
 func (response *Response) String(body string) error {
 	response.writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	return response.Send([]byte(body))
+	response.writeStatus()
+	if !response.disableBodyCapture {
+		response.body.WriteString(body)
+	}
+	_, err := io.WriteString(response.writer, body)
+	return err
 }
 
 func (response *Response) JSON(obj interface{}) error {
 	response.writer.Header().Set("Content-Type", "application/json")
 	response.writeStatus()
 	return json.NewEncoder(response.writer).Encode(obj)
+}
+
+func (response *Response) JSONBytes(body []byte) error {
+	return response.Bytes(response.statusOrOK(), "application/json", body)
+}
+
+func (response *Response) Bytes(status int, contentType string, body []byte) error {
+	if status == 0 {
+		status = response.statusOrOK()
+	}
+	header := response.writer.Header()
+	if contentType != "" {
+		header.Set("Content-Type", contentType)
+	}
+	header.Set("Content-Length", strconv.Itoa(len(body)))
+	response.writer.WriteHeader(status)
+	_, err := response.writer.Write(body)
+	return err
 }
 
 func (response *Response) XML(obj interface{}) error {
@@ -73,4 +101,11 @@ func (response *Response) writeStatus() {
 	if response.statusCode != 0 {
 		response.writer.WriteHeader(response.statusCode)
 	}
+}
+
+func (response *Response) statusOrOK() int {
+	if response.statusCode != 0 {
+		return response.statusCode
+	}
+	return http.StatusOK
 }

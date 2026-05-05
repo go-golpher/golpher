@@ -26,6 +26,36 @@ app := golpher.New(golpher.AppConfig{
 })
 ```
 
+For environments that should not print the startup banner:
+
+```go
+app := golpher.New(golpher.AppConfig{DisableBanner: true})
+```
+
+or:
+
+```go
+app.Listen(golpher.ListenConfig{Silent: true})
+```
+
+## Custom listeners
+
+Use `app.Serve(listener)` when the transport listener is created outside Golpher, for example when binding to a Unix domain socket or using a listener managed by another process.
+
+```go
+listener, err := net.Listen("unix", "/tmp/app.sock")
+if err != nil {
+	log.Fatal(err)
+}
+if err := app.Serve(listener); err != nil && !errors.Is(err, net.ErrClosed) {
+	log.Fatal(err)
+}
+```
+
+The router and handlers remain ordinary `net/http` handlers; only the listener changes.
+
+`Serve(listener)` owns only the serve loop it creates. If you need coordinated graceful shutdown, create and retain your own server with `app.Server(addr)` and call `Shutdown(ctx)` on that server, or close the listener from your lifecycle manager.
+
 ## Graceful shutdown
 
 Golpher exposes a small wrapper over `http.Server.Shutdown`.
