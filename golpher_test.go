@@ -165,6 +165,37 @@ func TestRawRouteBypassesGolpherMiddleware(t *testing.T) {
 	}
 }
 
+func TestRawRouteRegisteredBeforeMiddlewareDoesNotBuildNilMiddlewareChain(t *testing.T) {
+	app := New()
+	app.Raw(http.MethodGet, "/raw", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("raw"))
+	})
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("expected adding middleware after raw route not to panic, got %v", recovered)
+		}
+	}()
+	app.Use(func(next HandlerFunc) HandlerFunc {
+		if next == nil {
+			panic("nil next")
+		}
+		return func(req *Request, res *Response) error {
+			return next(req, res)
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/raw", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "raw" {
+		t.Fatalf("expected raw body, got %q", rec.Body.String())
+	}
+}
+
 func TestAppServerUsesConfiguredTimeouts(t *testing.T) {
 	app := New(AppConfig{
 		ReadHeaderTimeout: time.Second,

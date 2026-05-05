@@ -141,7 +141,7 @@ func (r *Router) dispatch(response *Response, req *http.Request, params map[stri
 func (r *Router) earlierMatch(method, path, trimmedPath string, beforeIndex int) (int, map[string]string, bool) {
 	for i := 0; i < beforeIndex; i++ {
 		route := &r.routes[i]
-		if route.method != method {
+		if route.static || route.method != method {
 			continue
 		}
 		params, ok := route.match(path, trimmedPath)
@@ -201,6 +201,10 @@ func isStaticPattern(pattern string) bool {
 }
 
 func (r *route) rebuildHandler(appMiddlewares []MiddlewareFunc) {
+	if r.rawHandler != nil {
+		r.compiledHandler = nil
+		return
+	}
 	handler := r.handler
 	if len(r.middlewares) > 0 {
 		handler = chain(handler, r.middlewares...)
