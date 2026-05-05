@@ -220,7 +220,11 @@ func TestAppServeUsesProvidedListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected GET through provided listener: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("unexpected response body close error: %v", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
@@ -234,7 +238,7 @@ func TestAppServeUsesProvidedListener(t *testing.T) {
 	}
 	select {
 	case err := <-errCh:
-		if err != nil && !errors.Is(err, net.ErrClosed) && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, http.ErrServerClosed) {
 			t.Fatalf("expected closed listener error, got %v", err)
 		}
 	case <-time.After(time.Second):
