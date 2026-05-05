@@ -13,8 +13,9 @@ var responsePool = sync.Pool{New: func() any { return new(Response) }}
 const maxPooledResponseBufferCapacity = 64 * 1024
 
 type Router struct {
-	app    *App
-	routes []route
+	app          *App
+	routes       []route
+	staticRoutes map[string]map[string]int
 }
 
 type route struct {
@@ -26,6 +27,7 @@ type route struct {
 	handler         HandlerFunc
 	middlewares     []MiddlewareFunc
 	compiledHandler HandlerFunc
+	rawHandler      RawHandlerFunc
 }
 
 func (r *Router) handle(method, pattern string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
@@ -40,6 +42,20 @@ func (r *Router) handle(method, pattern string, handler HandlerFunc, middlewares
 	}
 	newRoute.rebuildHandler(r.app.middlewares)
 	r.routes = append(r.routes, newRoute)
+	r.registerStaticRoute(len(r.routes)-1, newRoute)
+}
+
+func (r *Router) handleRaw(method, pattern string, handler RawHandlerFunc) {
+	newRoute := route{
+		method:         method,
+		pattern:        pattern,
+		trimmedPattern: strings.Trim(pattern, "/"),
+		segments:       splitPath(pattern),
+		static:         isStaticPattern(pattern),
+		rawHandler:     handler,
+	}
+	r.routes = append(r.routes, newRoute)
+	r.registerStaticRoute(len(r.routes)-1, newRoute)
 }
 
 func (r *Router) GET(pattern string, handler HandlerFunc) {
@@ -63,12 +79,26 @@ func (r *Router) PATCH(pattern string, handler HandlerFunc) {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	response := acquireResponse(w)
+	response := acquireResponse(w, r.app.Config.DisableResponseBodyCapture)
 	defer releaseResponse(response)
+
+	if byPath := r.staticRoutes[req.Method]; byPath != nil {
+		if staticIdx, ok := byPath[req.URL.Path]; ok {
+			trimmedPath := strings.Trim(req.URL.Path, "/")
+			if earlierIdx, params, ok := r.earlierMatch(req.Method, req.URL.Path, trimmedPath, staticIdx); ok {
+				r.dispatch(response, req, params, earlierIdx)
+				return
+			}
+			r.dispatch(response, req, nil, staticIdx)
+			return
+		}
+	}
+
 	var methodMismatch bool
 	trimmedPath := strings.Trim(req.URL.Path, "/")
 
-	for _, route := range r.routes {
+	for i := range r.routes {
+		route := &r.routes[i]
 		params, ok := route.match(req.URL.Path, trimmedPath)
 		if !ok {
 			continue
@@ -78,13 +108,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			continue
 		}
 
-		request := acquireRequest(req, params)
-		defer releaseRequest(request)
-		handler := route.compiledHandler
-		if err := handler(request, response); err != nil {
-			ctx := &Context{Request: request, Response: response}
-			r.app.ErrorHandler(ctx, err)
-		}
+		r.dispatch(response, req, params, i)
 		return
 	}
 
@@ -97,6 +121,35 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.app.ErrorHandler(ctx, ErrorGolpher{Code: http.StatusNotFound, Message: "Not Found"})
+}
+
+func (r *Router) dispatch(response *Response, req *http.Request, params map[string]string, routeIndex int) {
+	route := &r.routes[routeIndex]
+	if route.rawHandler != nil {
+		route.rawHandler(response.writer, req)
+		return
+	}
+	request := acquireRequest(req, params)
+	defer releaseRequest(request)
+	handler := route.compiledHandler
+	if err := handler(request, response); err != nil {
+		ctx := &Context{Request: request, Response: response}
+		r.app.ErrorHandler(ctx, err)
+	}
+}
+
+func (r *Router) earlierMatch(method, path, trimmedPath string, beforeIndex int) (int, map[string]string, bool) {
+	for i := 0; i < beforeIndex; i++ {
+		route := &r.routes[i]
+		if route.method != method {
+			continue
+		}
+		params, ok := route.match(path, trimmedPath)
+		if ok {
+			return i, params, true
+		}
+	}
+	return 0, nil, false
 }
 
 func (r *Router) allowedMethods(path, trimmedPath string) string {
@@ -164,6 +217,37 @@ func (r *Router) rebuildHandlers() {
 	}
 }
 
+func (r *Router) registerStaticRoute(index int, route route) {
+	if !route.static {
+		return
+	}
+	if r.staticRoutes == nil {
+		r.staticRoutes = make(map[string]map[string]int)
+	}
+	byPath := r.staticRoutes[route.method]
+	if byPath == nil {
+		byPath = make(map[string]int)
+		r.staticRoutes[route.method] = byPath
+	}
+	for _, path := range staticRoutePaths(route.pattern, route.trimmedPattern) {
+		if _, exists := byPath[path]; !exists {
+			byPath[path] = index
+		}
+	}
+}
+
+func staticRoutePaths(pattern, trimmedPattern string) []string {
+	if trimmedPattern == "" {
+		return []string{"/"}
+	}
+	canonical := "/" + trimmedPattern
+	trailing := canonical + "/"
+	if pattern == trailing {
+		return []string{trailing, canonical}
+	}
+	return []string{canonical, trailing}
+}
+
 func acquireRequest(req *http.Request, params map[string]string) *Request {
 	request := requestPool.Get().(*Request)
 	request.http = req
@@ -191,10 +275,11 @@ func releaseRequest(request *Request) {
 	requestPool.Put(request)
 }
 
-func acquireResponse(w http.ResponseWriter) *Response {
+func acquireResponse(w http.ResponseWriter, disableBodyCapture ...bool) *Response {
 	response := responsePool.Get().(*Response)
 	response.writer = w
 	response.statusCode = 0
+	response.disableBodyCapture = len(disableBodyCapture) > 0 && disableBodyCapture[0]
 	response.body.Reset()
 	return response
 }
@@ -205,6 +290,7 @@ func releaseResponse(response *Response) {
 	}
 	response.writer = nil
 	response.statusCode = 0
+	response.disableBodyCapture = false
 	if response.body.Cap() > maxPooledResponseBufferCapacity {
 		response.body = bytes.Buffer{}
 	} else {

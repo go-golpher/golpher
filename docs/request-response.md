@@ -111,6 +111,12 @@ return res.Status(http.StatusCreated).JSON(payload)
 return res.Send([]byte("ok"))
 ```
 
+Write bytes with status, content type, and content length without capturing a response snapshot:
+
+```go
+return res.Bytes(http.StatusOK, "application/octet-stream", payload)
+```
+
 ### String
 
 ```go
@@ -122,6 +128,14 @@ return res.String("hello")
 ```go
 return res.JSON(map[string]string{"status": "ok"})
 ```
+
+Write pre-encoded JSON bytes:
+
+```go
+return res.JSONBytes([]byte(`{"status":"ok"}`))
+```
+
+`JSONBytes` is useful for hot paths that already have serialized JSON and want to avoid `encoding/json` work. It does not validate or escape the input; only use it with trusted, pre-serialized JSON bytes.
 
 ### XML
 
@@ -145,3 +159,13 @@ text := res.BodyString()
 ```
 
 This is useful for middleware and tests. Direct writes through `res.Raw()` are not captured by the snapshot.
+
+Latency-sensitive services that do not need this snapshot may configure:
+
+```go
+app := golpher.New(golpher.AppConfig{
+    DisableResponseBodyCapture: true,
+})
+```
+
+With this option, `Send` and `String` still write to the client, but `Body()` and `BodyString()` remain empty for those writes. `Bytes` and `JSONBytes` always skip the snapshot because they are explicit fast-path helpers.
