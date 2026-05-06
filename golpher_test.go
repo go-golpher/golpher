@@ -42,6 +42,43 @@ func TestRouterGETDispatchesMatchingHandler(t *testing.T) {
 	}
 }
 
+func TestAppGetDispatchesCtxHandler(t *testing.T) {
+	app := New()
+	app.Get("/users/:id", func(ctx *Ctx) error {
+		return ctx.Status(http.StatusCreated).String(ctx.Param("id"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/users/42", nil))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "42" {
+		t.Fatalf("expected ctx param 42, got %q", rec.Body.String())
+	}
+}
+
+func TestAppGETContextDispatchesCtxRequestResponseHandler(t *testing.T) {
+	app := New()
+	app.GETContext("/users/:id", func(ctx *Ctx, req *Request, res *Response) error {
+		if ctx.RequestRef() != req || ctx.ResponseRef() != res {
+			t.Fatal("expected ctx to reference request and response")
+		}
+		return res.String(req.Param("id"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/users/42", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "42" {
+		t.Fatalf("expected request param 42, got %q", rec.Body.String())
+	}
+}
+
 func TestAppPOSTRegistersRouteAndDispatchesHandler(t *testing.T) {
 	app := New()
 	app.POST("/items", func(_ *Request, res *Response) error {
@@ -118,7 +155,7 @@ func TestAppRawRegistersRouteAndDispatchesStandardHandler(t *testing.T) {
 	}
 }
 
-func TestRawStaticRoutePreservesEarlierDynamicRoutePrecedence(t *testing.T) {
+func TestRawStaticRouteTakesPrecedenceOverEarlierDynamicRoute(t *testing.T) {
 	app := New()
 	app.GET("/:id", func(req *Request, res *Response) error {
 		return res.String("dynamic:" + req.Param("id"))
@@ -133,8 +170,8 @@ func TestRawStaticRoutePreservesEarlierDynamicRoutePrecedence(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-	if strings.TrimSpace(rec.Body.String()) != "dynamic:health" {
-		t.Fatalf("expected earlier dynamic route to preserve precedence, got %q", rec.Body.String())
+	if strings.TrimSpace(rec.Body.String()) != "raw" {
+		t.Fatalf("expected static raw route to take precedence, got %q", rec.Body.String())
 	}
 }
 
@@ -350,6 +387,85 @@ func TestRouterSupportsPathParams(t *testing.T) {
 	}
 }
 
+func TestDynamicRouteMatchIntoDoesNotAllocateParams(t *testing.T) {
+	route := route{
+		method:           http.MethodGet,
+		compiledSegments: compileRouteSegments("/users/:id/orders/:orderID"),
+		paramNames:       routeParamNames("/users/:id/orders/:orderID"),
+	}
+	request := &Request{paramValues: make([]string, 0, 2)}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if !route.matchInto("/users/42/orders/abc", "users/42/orders/abc", request) {
+			t.Fatal("expected route match")
+		}
+		if request.Param("id") != "42" || request.Param("orderID") != "abc" {
+			t.Fatalf("unexpected params: id=%q orderID=%q", request.Param("id"), request.Param("orderID"))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("expected dynamic param matching to allocate 0 times, got %.2f", allocs)
+	}
+}
+
+func TestDynamicRouteDoesNotMatchExtraSegments(t *testing.T) {
+	app := New()
+	app.GET("/users/:id", func(req *Request, res *Response) error {
+		return res.String(req.Param("id"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/users/42/orders", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestDynamicRouteDoesNotMatchRootPath(t *testing.T) {
+	app := New()
+	app.GET("/:id", func(req *Request, res *Response) error {
+		return res.String(req.Param("id"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestDynamicRootMethodMismatchIgnoresParamRoute(t *testing.T) {
+	app := New()
+	app.GET("/:id", func(req *Request, res *Response) error {
+		return res.String(req.Param("id"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestDynamicWildcardCapturesRemainingPath(t *testing.T) {
+	app := New()
+	app.GET("/files/*path", func(req *Request, res *Response) error {
+		return res.String(req.Param("path"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/files/a/b/c", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "a/b/c" {
+		t.Fatalf("expected wildcard path a/b/c, got %q", rec.Body.String())
+	}
+}
+
 func TestStaticRouteFastPathPreservesTrailingSlashCompatibility(t *testing.T) {
 	app := New()
 	app.GET("/hello", func(_ *Request, res *Response) error {
@@ -367,7 +483,7 @@ func TestStaticRouteFastPathPreservesTrailingSlashCompatibility(t *testing.T) {
 	}
 }
 
-func TestStaticRouteFastPathPreservesRegistrationOrderWithEarlierDynamicRoute(t *testing.T) {
+func TestStaticRouteFastPathTakesPrecedenceOverEarlierDynamicRoute(t *testing.T) {
 	app := New()
 	app.GET("/:id", func(req *Request, res *Response) error {
 		return res.Status(http.StatusOK).String("dynamic:" + req.Param("id"))
@@ -382,8 +498,8 @@ func TestStaticRouteFastPathPreservesRegistrationOrderWithEarlierDynamicRoute(t 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-	if strings.TrimSpace(rec.Body.String()) != "dynamic:health" {
-		t.Fatalf("expected earlier dynamic route to preserve precedence, got %q", rec.Body.String())
+	if strings.TrimSpace(rec.Body.String()) != "static" {
+		t.Fatalf("expected static route to take precedence, got %q", rec.Body.String())
 	}
 }
 
@@ -459,6 +575,28 @@ func TestUseHTTPRespectsDisabledResponseBodyCapture(t *testing.T) {
 	}
 	if snapshot != "" {
 		t.Fatalf("expected disabled response snapshot through UseHTTP, got %q", snapshot)
+	}
+}
+
+func TestUseHTTPPreservesDynamicRouteParams(t *testing.T) {
+	app := New()
+	app.UseHTTP(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+		})
+	})
+	app.GET("/users/:id", func(req *Request, res *Response) error {
+		return res.String(req.Param("id"))
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/users/42", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "42" {
+		t.Fatalf("expected dynamic param through UseHTTP, got %q", rec.Body.String())
 	}
 }
 
@@ -1285,6 +1423,8 @@ type benchmarkResponseWriter struct {
 	writes int
 }
 
+var benchmarkOKBytes = []byte("ok")
+
 func (w *benchmarkResponseWriter) Header() http.Header {
 	if w.header == nil {
 		w.header = make(http.Header)
@@ -1312,7 +1452,7 @@ func (w *benchmarkResponseWriter) reset() {
 func BenchmarkStaticRouteRaw(b *testing.B) {
 	app := New()
 	app.Raw(http.MethodGet, "/ready", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(benchmarkOKBytes)
 	})
 	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 	w := &benchmarkResponseWriter{}
@@ -1341,6 +1481,22 @@ func BenchmarkStaticRouteGolpher(b *testing.B) {
 	}
 }
 
+func BenchmarkStaticRouteCtx(b *testing.B) {
+	app := New(AppConfig{DisableResponseBodyCapture: true})
+	app.Get("/ready", func(ctx *Ctx) error {
+		return ctx.String("ok")
+	})
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w := &benchmarkResponseWriter{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		app.ServeHTTP(w, req)
+	}
+}
+
 func BenchmarkDynamicRouteParam(b *testing.B) {
 	app := New(AppConfig{DisableResponseBodyCapture: true})
 	app.GET("/users/:id", func(req *Request, res *Response) error {
@@ -1357,6 +1513,22 @@ func BenchmarkDynamicRouteParam(b *testing.B) {
 	}
 }
 
+func BenchmarkDynamicRouteMatchInto(b *testing.B) {
+	route := route{
+		method:           http.MethodGet,
+		compiledSegments: compileRouteSegments("/users/:id/orders/:orderID"),
+		paramNames:       routeParamNames("/users/:id/orders/:orderID"),
+	}
+	request := &Request{paramValues: make([]string, 0, 2)}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !route.matchInto("/users/42/orders/abc", "users/42/orders/abc", request) {
+			b.Fatal("expected route match")
+		}
+	}
+}
+
 func BenchmarkResponseBytes(b *testing.B) {
 	w := &benchmarkResponseWriter{}
 	body := []byte(`{"approved":true,"fraud_score":0}`)
@@ -1365,6 +1537,19 @@ func BenchmarkResponseBytes(b *testing.B) {
 		w.reset()
 		res := &Response{writer: w}
 		if err := res.Bytes(http.StatusOK, "application/json", body); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkResponseJSONBytes(b *testing.B) {
+	w := &benchmarkResponseWriter{}
+	body := []byte(`{"approved":true,"fraud_score":0}`)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		w.reset()
+		res := &Response{writer: w}
+		if err := res.JSONBytes(body); err != nil {
 			b.Fatal(err)
 		}
 	}

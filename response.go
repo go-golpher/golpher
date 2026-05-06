@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
-	"strconv"
+	"unsafe"
 )
 
 type Response struct {
@@ -15,6 +14,20 @@ type Response struct {
 	statusCode         int
 	writer             http.ResponseWriter
 	disableBodyCapture bool
+}
+
+var (
+	textPlainCharsetUTF8Header   = []string{"text/plain; charset=utf-8"}
+	textPlainHeader              = []string{"text/plain"}
+	applicationJSONHeader        = []string{"application/json"}
+	applicationOctetStreamHeader = []string{"application/octet-stream"}
+	commonContentLengthHeaders   [128][]string
+)
+
+func init() {
+	for i := range commonContentLengthHeaders {
+		commonContentLengthHeaders[i] = []string{itoa(i)}
+	}
 }
 
 func (response *Response) Status(code int) *Response {
@@ -48,12 +61,12 @@ func (response *Response) BodyString() string {
 }
 
 func (response *Response) String(body string) error {
-	response.writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	response.writer.Header()["Content-Type"] = textPlainCharsetUTF8Header
 	response.writeStatus()
 	if !response.disableBodyCapture {
 		response.body.WriteString(body)
 	}
-	_, err := io.WriteString(response.writer, body)
+	_, err := writeString(response.writer, body)
 	return err
 }
 
@@ -73,9 +86,9 @@ func (response *Response) Bytes(status int, contentType string, body []byte) err
 	}
 	header := response.writer.Header()
 	if contentType != "" {
-		header.Set("Content-Type", contentType)
+		header["Content-Type"] = contentTypeHeader(contentType)
 	}
-	header.Set("Content-Length", strconv.Itoa(len(body)))
+	header["Content-Length"] = contentLengthHeader(len(body))
 	response.writer.WriteHeader(status)
 	_, err := response.writer.Write(body)
 	return err
@@ -108,4 +121,58 @@ func (response *Response) statusOrOK() int {
 		return response.statusCode
 	}
 	return http.StatusOK
+}
+
+type stringWriter interface {
+	WriteString(string) (int, error)
+}
+
+func writeString(writer http.ResponseWriter, body string) (int, error) {
+	if writer, ok := writer.(stringWriter); ok {
+		return writer.WriteString(body)
+	}
+	return writer.Write(unsafeStringBytes(body))
+}
+
+func unsafeStringBytes(body string) []byte {
+	if body == "" {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(body), len(body))
+}
+
+func contentTypeHeader(contentType string) []string {
+	switch contentType {
+	case "application/json":
+		return applicationJSONHeader
+	case "text/plain":
+		return textPlainHeader
+	case "text/plain; charset=utf-8":
+		return textPlainCharsetUTF8Header
+	case "application/octet-stream":
+		return applicationOctetStreamHeader
+	default:
+		return []string{contentType}
+	}
+}
+
+func contentLengthHeader(length int) []string {
+	if length >= 0 && length < len(commonContentLengthHeaders) {
+		return commonContentLengthHeaders[length]
+	}
+	return []string{itoa(length)}
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }

@@ -9,9 +9,12 @@ import (
 )
 
 type Request struct {
-	http   *http.Request
-	body   *Body
-	params map[string]string
+	http        *http.Request
+	body        *Body
+	params      map[string]string
+	paramNames  []string
+	paramValues []string
+	ctx         Ctx
 }
 
 type Body struct {
@@ -38,6 +41,11 @@ func (request *Request) SetContext(ctx context.Context) {
 
 func (request *Request) Param(name string) string {
 	if request.params == nil {
+		for i, paramName := range request.paramNames {
+			if paramName == name {
+				return request.paramValues[i]
+			}
+		}
 		return ""
 	}
 	return request.params[name]
