@@ -138,6 +138,8 @@ func unsafeStringBytes(body string) []byte {
 	if body == "" {
 		return nil
 	}
+	// #nosec G103 -- Response.String writes synchronously and never mutates the
+	// returned slice; this avoids an otherwise per-response string-to-[]byte copy.
 	return unsafe.Slice(unsafe.StringData(body), len(body))
 }
 

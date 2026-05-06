@@ -245,21 +245,6 @@ func (r *Router) pathMatchesAnyMethod(currentMethod, path, trimmedPath string) b
 	return false
 }
 
-func (r route) match(path, trimmedPath string) (map[string]string, bool) {
-	var request Request
-	if !r.matchInto(path, trimmedPath, &request) {
-		return nil, false
-	}
-	if len(request.paramNames) == 0 {
-		return nil, true
-	}
-	params := make(map[string]string, len(request.paramNames))
-	for i, name := range request.paramNames {
-		params[name] = request.paramValues[i]
-	}
-	return params, true
-}
-
 func (r route) matchInto(path, trimmedPath string, request *Request) bool {
 	request.paramNames = nil
 	request.paramValues = request.paramValues[:0]
