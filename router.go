@@ -18,31 +18,20 @@ const (
 	routeSegmentWildcard
 )
 
-const (
-	routeKindNative uint8 = iota
-	routeKindCtx
-	routeKindContext
-	routeKindRaw
-)
-
 type Router struct {
 	app           *App
 	routes        []route
-	staticRoutes  map[string]map[string]int
-	dynamicRoutes map[string]*routeNode
+	staticRoutes  map[string]map[string]int // method → path → route index
+	dynamicRoutes map[string]*routeNode     // method → trie root
 }
 
 type route struct {
 	method           string
-	kind             uint8
 	compiledSegments []routeSegment
 	paramNames       []string
 	nativeHandler    HandlerFunc
-	ctxHandler       Handler
-	contextHandler   ContextHandlerFunc
 	middlewares      []MiddlewareFunc
 	compiledHandler  HandlerFunc
-	rawHandler       RawHandlerFunc
 }
 
 type routeSegment struct {
@@ -60,10 +49,24 @@ type routeNode struct {
 }
 
 func (r *Router) handle(method, pattern string, handler HandlerFunc, middlewares ...MiddlewareFunc) {
-	compiledSegments, paramNames := compileDynamicRoute(pattern)
+	validateMethod(method)
+	validatePattern(pattern)
+	if handler == nil {
+		panic("golpher: nil handler")
+	}
+
+	compiledSegments, paramNames := compileRouteSegmentsResult(pattern)
+	canonical := canonicalPattern(pattern)
+
+	for i := range r.routes {
+		existing := &r.routes[i]
+		if existing.method == method && canonicalPattern(existing.canonical()) == canonical {
+			panic("golpher: duplicate route: " + method + " " + canonical)
+		}
+	}
+
 	newRoute := route{
 		method:           method,
-		kind:             routeKindNative,
 		compiledSegments: compiledSegments,
 		paramNames:       paramNames,
 		nativeHandler:    handler,
@@ -71,90 +74,150 @@ func (r *Router) handle(method, pattern string, handler HandlerFunc, middlewares
 	}
 	newRoute.rebuildHandler(r.app.middlewares)
 	r.routes = append(r.routes, newRoute)
-	r.registerStaticRoute(len(r.routes)-1, method, pattern)
-	r.registerDynamicRoute(len(r.routes)-1, method, newRoute.compiledSegments)
+	idx := len(r.routes) - 1
+
+	r.registerStaticRoute(idx, method, pattern)
+	r.registerDynamicRoute(idx, method, newRoute.compiledSegments)
 }
 
-func (r *Router) handleCtx(method, pattern string, handler Handler, middlewares ...MiddlewareFunc) {
-	compiledSegments, paramNames := compileDynamicRoute(pattern)
-	newRoute := route{
-		method:           method,
-		kind:             routeKindCtx,
-		compiledSegments: compiledSegments,
-		paramNames:       paramNames,
-		ctxHandler:       handler,
-		middlewares:      append([]MiddlewareFunc(nil), middlewares...),
+func (r route) canonical() string {
+	if len(r.compiledSegments) == 0 {
+		return "" // handled by registerStaticRoute
 	}
-	newRoute.rebuildHandler(r.app.middlewares)
-	r.routes = append(r.routes, newRoute)
-	r.registerStaticRoute(len(r.routes)-1, method, pattern)
-	r.registerDynamicRoute(len(r.routes)-1, method, newRoute.compiledSegments)
-}
-
-func (r *Router) handleContext(method, pattern string, handler ContextHandlerFunc, middlewares ...MiddlewareFunc) {
-	compiledSegments, paramNames := compileDynamicRoute(pattern)
-	newRoute := route{
-		method:           method,
-		kind:             routeKindContext,
-		compiledSegments: compiledSegments,
-		paramNames:       paramNames,
-		contextHandler:   handler,
-		middlewares:      append([]MiddlewareFunc(nil), middlewares...),
+	parts := make([]string, len(r.compiledSegments))
+	for i, seg := range r.compiledSegments {
+		switch seg.kind {
+		case routeSegmentParam:
+			parts[i] = ":" + seg.value
+		case routeSegmentWildcard:
+			parts[i] = "*" + seg.value
+		default:
+			parts[i] = seg.value
+		}
 	}
-	newRoute.rebuildHandler(r.app.middlewares)
-	r.routes = append(r.routes, newRoute)
-	r.registerStaticRoute(len(r.routes)-1, method, pattern)
-	r.registerDynamicRoute(len(r.routes)-1, method, newRoute.compiledSegments)
+	return "/" + strings.Join(parts, "/")
 }
 
-func (r *Router) handleRaw(method, pattern string, handler RawHandlerFunc) {
-	compiledSegments, paramNames := compileDynamicRoute(pattern)
-	newRoute := route{
-		method:           method,
-		kind:             routeKindRaw,
-		compiledSegments: compiledSegments,
-		paramNames:       paramNames,
-		rawHandler:       handler,
+// validateMethod checks that method is a valid RFC 9110 token.
+func validateMethod(method string) {
+	if len(method) == 0 {
+		panic("golpher: invalid method: empty")
 	}
-	r.routes = append(r.routes, newRoute)
-	r.registerStaticRoute(len(r.routes)-1, method, pattern)
-	r.registerDynamicRoute(len(r.routes)-1, method, newRoute.compiledSegments)
+	for i := 0; i < len(method); i++ {
+		if !isTokenByte(method[i]) {
+			panic("golpher: invalid method: " + method)
+		}
+	}
 }
 
-func (r *Router) GET(pattern string, handler HandlerFunc) {
-	r.handle(http.MethodGet, pattern, handler)
+// isTokenByte returns true for RFC 9110 tchar characters.
+func isTokenByte(c byte) bool {
+	if c >= 'a' && c <= 'z' {
+		return true
+	}
+	if c >= 'A' && c <= 'Z' {
+		return true
+	}
+	if c >= '0' && c <= '9' {
+		return true
+	}
+	switch c {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	}
+	return false
 }
 
-func (r *Router) POST(pattern string, handler HandlerFunc) {
-	r.handle(http.MethodPost, pattern, handler)
+// validatePattern checks pattern syntax. Must start with '/'.
+func validatePattern(pattern string) {
+	if len(pattern) == 0 || pattern[0] != '/' {
+		panic("golpher: invalid pattern: must start with /")
+	}
+	parts := splitPattern(pattern)
+	if len(parts) == 0 {
+		return // root "/" is valid
+	}
+	seenParams := make(map[string]bool)
+	for i, part := range parts {
+		if strings.HasPrefix(part, ":") {
+			name := part[1:]
+			if name == "" {
+				panic("golpher: invalid pattern: empty param name in " + pattern)
+			}
+			if !isParamName(name) {
+				panic("golpher: invalid pattern: invalid param name :" + name + " in " + pattern)
+			}
+			if seenParams[name] {
+				panic("golpher: invalid pattern: duplicate param name :" + name + " in " + pattern)
+			}
+			seenParams[name] = true
+			continue
+		}
+		if strings.HasPrefix(part, "*") {
+			name := part[1:]
+			if name == "" {
+				panic("golpher: invalid pattern: empty wildcard name in " + pattern)
+			}
+			if !isParamName(name) {
+				panic("golpher: invalid pattern: invalid wildcard name *" + name + " in " + pattern)
+			}
+			if i != len(parts)-1 {
+				panic("golpher: invalid pattern: wildcard must be final segment in " + pattern)
+			}
+			continue
+		}
+	}
 }
 
-func (r *Router) PUT(pattern string, handler HandlerFunc) {
-	r.handle(http.MethodPut, pattern, handler)
+// isParamName checks that name matches [A-Za-z_][A-Za-z0-9_]*.
+func isParamName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	first := name[0]
+	if !((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_') {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		c := name[i]
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
-func (r *Router) DELETE(pattern string, handler HandlerFunc) {
-	r.handle(http.MethodDelete, pattern, handler)
+func splitPattern(pattern string) []string {
+	trimmed := strings.Trim(pattern, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
 }
 
-func (r *Router) PATCH(pattern string, handler HandlerFunc) {
-	r.handle(http.MethodPatch, pattern, handler)
+func canonicalPattern(pattern string) string {
+	trimmed := strings.Trim(pattern, "/")
+	if trimmed == "" {
+		return "/"
+	}
+	return "/" + trimmed
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	response := acquireResponse(w, r.app.Config.DisableResponseBodyCapture)
+	response := acquireResponse(w, r.app.config.EnableBodyCapture)
 	defer releaseResponse(response)
 
 	if byPath := r.staticRoutes[req.Method]; byPath != nil {
 		if staticIdx, ok := byPath[req.URL.Path]; ok {
-			r.dispatch(response, req, nil, staticIdx)
+			r.dispatch(response, req, staticIdx)
 			return
 		}
 	}
 
 	trimmedPath := strings.Trim(req.URL.Path, "/")
-	request := acquireRequest(req, nil)
+	request := acquireRequest(req, response, r.app.config.MaxRequestBodyBytes)
 	defer releaseRequest(request)
+
 	if tree := r.dynamicRoutes[req.Method]; tree != nil {
 		if routeIndex, ok := tree.match(trimmedPath, request); ok {
 			request.paramNames = r.routes[routeIndex].paramNames
@@ -165,51 +228,52 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	methodMismatch := r.pathMatchesAnyMethod(req.Method, req.URL.Path, trimmedPath)
 	if methodMismatch {
-		ctx := &Context{Request: request, Response: response}
 		response.Header().Set("Allow", r.allowedMethods(req.Method, req.URL.Path, trimmedPath))
-		r.app.ErrorHandler(ctx, ErrorGolpher{Code: http.StatusMethodNotAllowed, Message: "Method Not Allowed"})
+		r.app.reportError(request, response,
+			ErrorGolpher{Code: http.StatusMethodNotAllowed, Message: "Method Not Allowed"})
 		return
 	}
 
-	ctx := &Context{Request: request, Response: response}
-	r.app.ErrorHandler(ctx, ErrorGolpher{Code: http.StatusNotFound, Message: "Not Found"})
+	r.app.reportError(request, response,
+		ErrorGolpher{Code: http.StatusNotFound, Message: "Not Found"})
 }
 
-func (r *Router) dispatch(response *Response, req *http.Request, params map[string]string, routeIndex int) {
-	route := &r.routes[routeIndex]
-	if route.rawHandler != nil {
-		route.rawHandler(response.writer, req)
-		return
+func (r *Router) dispatchQUERYGuard(req *http.Request, request *Request, response *Response) bool {
+	if req.Header.Get("Content-Type") == "" {
+		r.app.reportError(request, response,
+			ErrorGolpher{Code: http.StatusBadRequest, Message: "Content-Type header required for QUERY"})
+		return false
 	}
-	request := acquireRequest(req, params)
+	return true
+}
+
+func (r *Router) dispatch(response *Response, req *http.Request, routeIndex int) {
+	request := acquireRequest(req, response, r.app.config.MaxRequestBodyBytes)
 	defer releaseRequest(request)
 	r.dispatchRequest(response, request, routeIndex)
 }
 
 func (r *Router) dispatchRequest(response *Response, request *Request, routeIndex int) {
 	route := &r.routes[routeIndex]
-	if route.kind == routeKindRaw {
-		route.rawHandler(response.writer, request.http)
-		return
+
+	if route.method == MethodQuery {
+		if !r.dispatchQUERYGuard(request.http, request, response) {
+			return
+		}
 	}
+
 	var err error
 	if route.compiledHandler != nil {
 		err = route.compiledHandler(request, response)
 	} else {
-		switch route.kind {
-		case routeKindCtx:
-			ctx := request.acquireCtx(response)
-			err = route.ctxHandler(ctx)
-		case routeKindContext:
-			ctx := request.acquireCtx(response)
-			err = route.contextHandler(ctx, request, response)
-		default:
-			err = route.nativeHandler(request, response)
-		}
+		err = route.nativeHandler(request, response)
 	}
+
 	if err != nil {
-		ctx := &Context{Request: request, Response: response}
-		r.app.ErrorHandler(ctx, err)
+		if r.app.handleMaxBytesError(request, response, err) {
+			return
+		}
+		r.app.reportError(request, response, err)
 	}
 }
 
@@ -245,25 +309,25 @@ func (r *Router) pathMatchesAnyMethod(currentMethod, path, trimmedPath string) b
 	return false
 }
 
-func (r route) matchInto(path, trimmedPath string, request *Request) bool {
+func (rt route) matchInto(path, trimmedPath string, request *Request) bool {
 	request.paramNames = nil
 	request.paramValues = request.paramValues[:0]
 	request.params = nil
-	if !r.isDynamic() {
+	if !rt.isDynamic() {
 		return false
 	}
 	if trimmedPath == "" {
-		if len(r.compiledSegments) == 1 && r.compiledSegments[0].kind == routeSegmentWildcard {
-			request.paramNames = r.paramNames
+		if len(rt.compiledSegments) == 1 && rt.compiledSegments[0].kind == routeSegmentWildcard {
+			request.paramNames = rt.paramNames
 			request.paramValues = append(request.paramValues, "")
 			return true
 		}
 		return false
 	}
 
-	request.paramNames = r.paramNames
+	request.paramNames = rt.paramNames
 	position := 0
-	for i, segment := range r.compiledSegments {
+	for i, segment := range rt.compiledSegments {
 		if position > len(trimmedPath) {
 			return false
 		}
@@ -280,7 +344,7 @@ func (r route) matchInto(path, trimmedPath string, request *Request) bool {
 				return false
 			}
 		}
-		if i == len(r.compiledSegments)-1 {
+		if i == len(rt.compiledSegments)-1 {
 			return next == len(trimmedPath)
 		}
 		position = next + 1
@@ -288,74 +352,20 @@ func (r route) matchInto(path, trimmedPath string, request *Request) bool {
 	return trimmedPath == ""
 }
 
-func (r route) isDynamic() bool {
-	return len(r.compiledSegments) > 0
+func (rt route) isDynamic() bool {
+	return len(rt.compiledSegments) > 0
 }
 
-func (r *route) matchesStaticIndex(staticRoutes map[string]map[string]int, routeIndex int, path string) bool {
-	if r.isDynamic() {
+func (rt *route) matchesStaticIndex(staticRoutes map[string]map[string]int, routeIndex int, path string) bool {
+	if rt.isDynamic() {
 		return false
 	}
-	byPath := staticRoutes[r.method]
+	byPath := staticRoutes[rt.method]
 	if byPath == nil {
 		return false
 	}
 	idx, ok := byPath[path]
 	return ok && idx == routeIndex
-}
-
-func splitPath(path string) []string {
-	path = strings.Trim(path, "/")
-	if path == "" {
-		return nil
-	}
-	return strings.Split(path, "/")
-}
-
-func isStaticPattern(pattern string) bool {
-	return !strings.ContainsAny(pattern, ":*")
-}
-
-func compileDynamicRoute(pattern string) ([]routeSegment, []string) {
-	if isStaticPattern(pattern) {
-		return nil, nil
-	}
-	segments := compileRouteSegments(pattern)
-	return segments, paramNamesFromSegments(segments)
-}
-
-func routeParamNames(pattern string) []string {
-	return paramNamesFromSegments(compileRouteSegments(pattern))
-}
-
-func paramNamesFromSegments(segments []routeSegment) []string {
-	var names []string
-	for _, segment := range segments {
-		if segment.kind == routeSegmentParam || segment.kind == routeSegmentWildcard {
-			names = append(names, segment.value)
-		}
-	}
-	return names
-}
-
-func compileRouteSegments(pattern string) []routeSegment {
-	parts := splitPath(pattern)
-	if len(parts) == 0 {
-		return nil
-	}
-	segments := make([]routeSegment, len(parts))
-	for i, part := range parts {
-		if strings.HasPrefix(part, ":") {
-			segments[i] = routeSegment{kind: routeSegmentParam, value: part[1:]}
-			continue
-		}
-		if strings.HasPrefix(part, "*") {
-			segments[i] = routeSegment{kind: routeSegmentWildcard, value: part[1:]}
-			continue
-		}
-		segments[i] = routeSegment{kind: routeSegmentStatic, value: part}
-	}
-	return segments
 }
 
 func nextSegmentEnd(path string, start int) int {
@@ -367,41 +377,32 @@ func nextSegmentEnd(path string, start int) int {
 	return len(path)
 }
 
-func (r *route) rebuildHandler(appMiddlewares []MiddlewareFunc) {
-	if r.kind == routeKindRaw {
-		r.compiledHandler = nil
-		return
+func compileRouteSegmentsResult(pattern string) ([]routeSegment, []string) {
+	trimmed := strings.Trim(pattern, "/")
+	if trimmed == "" {
+		return nil, nil
 	}
-	var handler HandlerFunc
-	switch r.kind {
-	case routeKindCtx:
-		handler = adaptCtxHandler(r.ctxHandler)
-	case routeKindContext:
-		handler = adaptContextHandler(r.contextHandler)
-	default:
-		handler = r.nativeHandler
+	parts := strings.Split(trimmed, "/")
+	segments := make([]routeSegment, len(parts))
+	var names []string
+	for i, part := range parts {
+		if strings.HasPrefix(part, ":") {
+			name := part[1:]
+			segments[i] = routeSegment{kind: routeSegmentParam, value: name}
+			names = append(names, name)
+		} else if strings.HasPrefix(part, "*") {
+			name := part[1:]
+			segments[i] = routeSegment{kind: routeSegmentWildcard, value: name}
+			names = append(names, name)
+		} else {
+			segments[i] = routeSegment{kind: routeSegmentStatic, value: part}
+		}
 	}
-	if len(r.middlewares) > 0 {
-		handler = chain(handler, r.middlewares...)
-	}
-	if len(appMiddlewares) > 0 {
-		handler = chain(handler, appMiddlewares...)
-	}
-	if len(r.middlewares) == 0 && len(appMiddlewares) == 0 {
-		r.compiledHandler = nil
-		return
-	}
-	r.compiledHandler = handler
-}
-
-func (r *Router) rebuildHandlers() {
-	for i := range r.routes {
-		r.routes[i].rebuildHandler(r.app.middlewares)
-	}
+	return segments, names
 }
 
 func (r *Router) registerStaticRoute(index int, method, pattern string) {
-	if !isStaticPattern(pattern) {
+	if strings.ContainsAny(pattern, ":*") {
 		return
 	}
 	if r.staticRoutes == nil {
@@ -412,9 +413,18 @@ func (r *Router) registerStaticRoute(index int, method, pattern string) {
 		byPath = make(map[string]int)
 		r.staticRoutes[method] = byPath
 	}
-	for _, path := range staticRoutePaths(pattern) {
-		if _, exists := byPath[path]; !exists {
-			byPath[path] = index
+	trimmed := strings.Trim(pattern, "/")
+	canonical := "/" + trimmed
+	trailing := canonical + "/"
+	if !strings.HasSuffix(pattern, "/") {
+		byPath[canonical] = index
+		if _, exists := byPath[trailing]; !exists {
+			byPath[trailing] = index
+		}
+	} else {
+		byPath[trailing] = index
+		if _, exists := byPath[canonical]; !exists {
+			byPath[canonical] = index
 		}
 	}
 }
@@ -435,12 +445,24 @@ func (r *Router) registerDynamicRoute(index int, method string, segments []route
 	for _, segment := range segments {
 		switch segment.kind {
 		case routeSegmentParam:
+			if node.wildcardChild != nil {
+				panic("golpher: conflicting route: :param vs *wildcard at same position")
+			}
+			if node.paramChild != nil && node.paramName != "" && node.paramName != segment.value {
+				panic("golpher: conflicting route: :" + node.paramName + " vs :" + segment.value)
+			}
 			if node.paramChild == nil {
 				node.paramChild = &routeNode{routeIndex: -1}
 			}
 			node.paramName = segment.value
 			node = node.paramChild
 		case routeSegmentWildcard:
+			if node.paramChild != nil {
+				panic("golpher: conflicting route: :param vs *wildcard at same position")
+			}
+			if node.wildcardChild != nil && node.wildcardName != "" && node.wildcardName != segment.value {
+				panic("golpher: conflicting route: *" + node.wildcardName + " vs *" + segment.value)
+			}
 			if node.wildcardChild == nil {
 				node.wildcardChild = &routeNode{routeIndex: -1}
 			}
@@ -509,29 +531,47 @@ func (n *routeNode) matchFrom(path string, position int, request *Request) (int,
 	return 0, false
 }
 
-func staticRoutePaths(pattern string) []string {
-	trimmedPattern := strings.Trim(pattern, "/")
-	if trimmedPattern == "" {
-		return []string{"/"}
+func (rt *route) rebuildHandler(appMiddlewares []MiddlewareFunc) {
+	handler := rt.nativeHandler
+	if len(rt.middlewares) > 0 {
+		handler = chain(handler, rt.middlewares...)
 	}
-	canonical := "/" + trimmedPattern
-	trailing := canonical + "/"
-	if pattern == trailing {
-		return []string{trailing, canonical}
+	if len(appMiddlewares) > 0 {
+		handler = chain(handler, appMiddlewares...)
 	}
-	return []string{canonical, trailing}
+	if len(rt.middlewares) == 0 && len(appMiddlewares) == 0 {
+		rt.compiledHandler = nil
+		return
+	}
+	rt.compiledHandler = handler
 }
 
-func acquireRequest(req *http.Request, params map[string]string) *Request {
+func (r *Router) rebuildHandlers() {
+	for i := range r.routes {
+		r.routes[i].rebuildHandler(r.app.middlewares)
+	}
+}
+
+func chain(handler HandlerFunc, middlewares ...MiddlewareFunc) HandlerFunc {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		handler = middlewares[i](handler)
+	}
+	return handler
+}
+
+func acquireRequest(req *http.Request, response *Response, appBodyLimit int64) *Request {
 	request := requestPool.Get().(*Request)
 	request.http = req
-	request.params = params
-	if request.body == nil {
-		request.body = &Body{}
-	}
-	request.body.bytes = nil
-	request.body.error = nil
-	request.body.loaded = false
+	request.params = nil
+	request.paramNames = nil
+	request.paramValues = request.paramValues[:0]
+	request.response = response
+	request.bodyData = nil
+	request.bodyErr = nil
+	request.bodyRead = false
+	request.bodyWrapped = false
+	request.appBodyLimit = appBodyLimit
+	request.bodyLimitOverride = 0
 	return request
 }
 
@@ -539,25 +579,28 @@ func releaseRequest(request *Request) {
 	if request == nil {
 		return
 	}
-	if request.body != nil {
-		request.body.bytes = nil
-		request.body.error = nil
-		request.body.loaded = false
-	}
+	request.bodyData = nil
+	request.bodyErr = nil
+	request.bodyRead = false
+	request.bodyWrapped = false
 	request.http = nil
 	request.params = nil
 	request.paramNames = nil
 	request.paramValues = request.paramValues[:0]
-	request.ctx.request = nil
-	request.ctx.response = nil
+	request.response = nil
+	request.appBodyLimit = 0
+	request.bodyLimitOverride = 0
 	requestPool.Put(request)
 }
 
-func acquireResponse(w http.ResponseWriter, disableBodyCapture ...bool) *Response {
+func acquireResponse(w http.ResponseWriter, captureEnabled bool) *Response {
 	response := responsePool.Get().(*Response)
-	response.writer = w
-	response.statusCode = 0
-	response.disableBodyCapture = len(disableBodyCapture) > 0 && disableBodyCapture[0]
+	tw := &trackingResponseWriter{w: w, res: response}
+	response.writer = tw
+	response.status = 0
+	response.bytesWritten = 0
+	response.committed = false
+	response.captureEnabled = captureEnabled
 	response.body.Reset()
 	return response
 }
@@ -567,19 +610,14 @@ func releaseResponse(response *Response) {
 		return
 	}
 	response.writer = nil
-	response.statusCode = 0
-	response.disableBodyCapture = false
+	response.status = 0
+	response.bytesWritten = 0
+	response.committed = false
+	response.captureEnabled = false
 	if response.body.Cap() > maxPooledResponseBufferCapacity {
 		response.body = bytes.Buffer{}
 	} else {
 		response.body.Reset()
 	}
 	responsePool.Put(response)
-}
-
-func chain(handler HandlerFunc, middlewares ...MiddlewareFunc) HandlerFunc {
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		handler = middlewares[i](handler)
-	}
-	return handler
 }

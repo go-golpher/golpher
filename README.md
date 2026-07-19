@@ -69,19 +69,23 @@ Golpher is a small Go web framework designed for teams that want modern routing 
 
 It is inspired by the developer experience of Fiber, Express, Gin, and Zinc, while keeping core Go primitives at the center: `http.Handler`, `http.ResponseWriter`, `*http.Request`, request cancellation, observability middleware, and ordinary `net/http` deployment.
 
-Golpher is built for applications that need framework convenience while remaining interoperable with the broader Go HTTP ecosystem.
+Golpher is built for applications that need framework convenience while remaining interoperable with the broader Go HTTP ecosystem. It supports the HTTP `QUERY` method (RFC 10008) for safe, idempotent queries with a request body.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ### Why Golpher?
 
 - **Standard-library native**: `*golpher.App` implements `http.Handler`.
-- **Modern routing DX**: `app.GET`, `app.POST`, route groups, and `:params`.
+- **Modern routing DX**: `app.GET`, `app.POST`, `app.QUERY`, route groups, `:params`, `*wildcards`.
 - **Middleware chain**: global, group, route, and stdlib `func(http.Handler) http.Handler` middleware.
 - **Interop by design**: mount existing `http.Handler` values with `FromHTTPHandler`.
 - **HTTP/2 ready**: works through Go's `net/http` TLS/ALPN support.
 - **HTTP/3 future-proof**: core stays transport-agnostic so an HTTP/3 adapter can be added later without breaking the API.
-- **Security-minded defaults**: server timeouts, `Recover`, and `BodyLimit` are available from the start.
+- **Security-minded defaults**: server timeouts, `Recover`, `BodyLimit`, 1 MiB default request body limit, route freeze, and validation are present from the start.
+- **RFC 10008 QUERY**: first-class `app.QUERY` / `Group.QUERY` with `Content-Type` enforcement.
+- **Error masking**: unknown errors produce generic `500` responses by default; the original error reaches only the configured observer.
+- **Response tracking**: committed state, status code, bytes written, and opt-in body capture on every write path, including `net/http` adapters.
+- **Lazy request body**: `http.MaxBytesReader` wrapping on first read; `Body()` returns `([]byte, error)` and caches the result.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -154,12 +158,23 @@ func main() {
   })
 
   app.GET("/users/:id", func(req *golpher.Request, res *golpher.Response) error {
-    return res.Status(http.StatusOK).JSON(map[string]string{
+    return res.SetStatus(http.StatusOK).JSON(map[string]string{
       "id": req.Param("id"),
     })
   })
 
-  app.Listen()
+  // RFC 10008 QUERY method — safe, idempotent, carries a body.
+  app.QUERY("/search", func(req *golpher.Request, res *golpher.Response) error {
+    var query SearchInput
+    if err := req.BodyJSON(&query); err != nil {
+      return err
+    }
+    return res.JSON(searchResults)
+  })
+
+  if err := app.Listen(); err != nil {
+    log.Fatal(err)
+  }
 }
 ```
 
@@ -195,6 +210,7 @@ For more examples, see the [Documentation](#documentation).
 - [Getting started](docs/getting-started.md)
 - [Principles and architecture](docs/principles.md)
 - [Routing](docs/routing.md)
+- [QUERY method (RFC 10008)](docs/query.md)
 - [Middleware](docs/middleware.md)
 - [Request and response](docs/request-response.md)
 - [Error handling](docs/error-handling.md)
@@ -202,6 +218,31 @@ For more examples, see the [Documentation](#documentation).
 - [Deployment and protocols](docs/deployment.md)
 - [Testing](docs/testing.md)
 - [Quality](docs/quality.md)
+- [Migration guide](docs/migration.md)
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- BREAKING CHANGES -->
+## Breaking changes (v0.0.x)
+
+| Change | Migration |
+|---|---|
+| `Handler`, `ContextHandlerFunc`, `RawHandlerFunc`, `Ctx`, `Context` removed. Single `HandlerFunc`. | Replace `Handler`/`ContextHandlerFunc` handlers with `func(*Request, *Response) error`. Replace `RawHandlerFunc` with `FromHTTPHandlerFunc`. |
+| `App.Get`/`Post`/`Put`/`Patch`/`Delete` (`Handler` variants), `HandleCtx`, `HandleContext`, `Raw` removed. | Use `App.Handle` or the uppercase verb shorthands (`GET`, `POST`, ...) with `HandlerFunc`. |
+| Error callbacks receive `(*Request, *Response, error)`. | Update `ErrorHandler` and `ErrorObserver` signatures. |
+| `res.Status(code)` renamed to `res.SetStatus(code)`. `res.Status()` now reports the effective status. | Replace all `res.Status(code)` calls with `res.SetStatus(code)`. |
+| `Request.Body()` returns `([]byte, error)`. | Replace `req.Body().Bytes()` with `req.Body()`, `req.Body().JSON(v)` with `req.BodyJSON(v)`. |
+| `DisableResponseBodyCapture` replaced by `EnableResponseBodyCapture` (default false). | Remove `DisableResponseBodyCapture`; add `EnableResponseBodyCapture: true` if capture is needed. |
+| `App.Listen()` returns `error`. | Handle the error: `if err := app.Listen(); err != nil { ... }`. |
+| `App.Config`, `App.Router`, `App.ErrorHandler` no longer exported. | Supply configuration through `AppConfig` to `New`. |
+| Route/middleware registration after first `ServeHTTP` panics. | Register all routes before serving. |
+| Invalid, duplicate, or conflicting route patterns panic at registration. | Fix invalid patterns; see `docs/routing.md`. |
+| Unknown errors masked: generic `500` body. | Use `ErrorObserver` to inspect original errors. |
+| Default request body limit: 1 MiB. | Set `MaxRequestBodyBytes` to adjust or `-1` to disable. |
+| `req.NewError` / `ctx.NewError` removed. | Use `ErrorGolpher{Code: status, Message: msg}`. |
+| `BodyLimit` middleware is lazy (no eager read). | Behaviour unchanged for calls through `req.Body()`. |
+
+For detailed migration patterns, see [docs/migration.md](docs/migration.md).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

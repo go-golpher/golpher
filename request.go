@@ -8,93 +8,148 @@ import (
 	"net/http"
 )
 
+// Request wraps an *http.Request with route parameters and body helpers.
 type Request struct {
 	http        *http.Request
-	body        *Body
 	params      map[string]string
 	paramNames  []string
 	paramValues []string
-	ctx         Ctx
+
+	// response is set during request acquisition and used to
+	// apply MaxBytesReader lazily.
+	response *Response
+
+	// bodyState caches the full body read result.
+	bodyData    []byte
+	bodyErr     error
+	bodyRead    bool
+	bodyWrapped bool
+
+	// appBodyLimit is the app-level MaxRequestBodyBytes default.
+	appBodyLimit int64
+	// bodyLimitOverride is the per-request body limit set by
+	// BodyLimit middleware. 0 means use the app-level default.
+	bodyLimitOverride int64
 }
 
-type Body struct {
-	bytes  []byte
-	error  error
-	loaded bool
+// Headers returns the request headers.
+func (r *Request) Headers() map[string][]string {
+	return r.http.Header
 }
 
-func (request *Request) Headers() map[string][]string {
-	return request.http.Header
+// Raw returns the underlying *http.Request.
+func (r *Request) Raw() *http.Request {
+	return r.http
 }
 
-func (request *Request) Raw() *http.Request {
-	return request.http
+// Context returns the request's context.
+func (r *Request) Context() context.Context {
+	return r.http.Context()
 }
 
-func (request *Request) Context() context.Context {
-	return request.http.Context()
+// SetContext replaces the request's context.
+func (r *Request) SetContext(ctx context.Context) {
+	r.http = r.http.WithContext(ctx)
 }
 
-func (request *Request) SetContext(ctx context.Context) {
-	request.http = request.http.WithContext(ctx)
-}
-
-func (request *Request) Param(name string) string {
-	if request.params == nil {
-		for i, paramName := range request.paramNames {
+// Param returns the value of a named route parameter.
+func (r *Request) Param(name string) string {
+	if r.params == nil {
+		for i, paramName := range r.paramNames {
 			if paramName == name {
-				return request.paramValues[i]
+				return r.paramValues[i]
 			}
 		}
 		return ""
 	}
-	return request.params[name]
+	return r.params[name]
 }
 
-func (request *Request) Query(name string) string {
-	return request.http.URL.Query().Get(name)
+// Query returns the value of a named URI query parameter.
+func (r *Request) Query(name string) string {
+	return r.http.URL.Query().Get(name)
 }
 
-func (request *Request) NewError(status int, err string) error {
-	return ErrorGolpher{Code: status, Message: err}
-}
-
-func (request *Request) Body() *Body {
-	if request.body != nil && request.body.loaded {
-		return request.body
+// Body reads the full request body (at most once) and returns the
+// bytes and any error. The body is bounded by the configured
+// MaxRequestBodyBytes via a lazy http.MaxBytesReader.
+//
+// The read result is cached; subsequent calls return the same pair
+// without re-reading. When the configured limit is exceeded the
+// error satisfies errors.As(err, &maxBytesErr) for
+// *http.MaxBytesError.
+func (r *Request) Body() ([]byte, error) {
+	if r.bodyRead {
+		return r.bodyData, r.bodyErr
 	}
-	data, err := io.ReadAll(request.http.Body)
-	body := request.body
+	r.bodyRead = true
+
+	body := r.body()
 	if body == nil {
-		body = &Body{}
-		request.body = body
+		r.bodyErr = io.EOF
+		return nil, r.bodyErr
 	}
+
+	data, err := io.ReadAll(body)
+	r.bodyData = data
+	r.bodyErr = err
+	return r.bodyData, r.bodyErr
+}
+
+// BodyJSON reads the request body (at most once) and unmarshals it
+// as JSON into v.
+func (r *Request) BodyJSON(v any) error {
+	data, err := r.Body()
 	if err != nil {
-		body.bytes = nil
-		body.error = err
-		body.loaded = true
-		return request.body
+		return err
 	}
-	body.bytes = data
-	body.error = nil
-	body.loaded = true
-	return request.body
+	return json.Unmarshal(data, v)
 }
 
-func (body *Body) Bytes() []byte {
-	return body.bytes
+// BodyXML reads the request body (at most once) and unmarshals it
+// as XML into v.
+func (r *Request) BodyXML(v any) error {
+	data, err := r.Body()
+	if err != nil {
+		return err
+	}
+	return xml.Unmarshal(data, v)
 }
 
-func (body *Body) JSON(v interface{}) error {
-	if body.error != nil {
-		return body.error
+// body returns the underlying body, wrapped with http.MaxBytesReader
+// the first time a positive limit is configured. Wrapping is
+// idempotent: calling body() twice with the same limit wraps once.
+// A nil response is tolerated; in that case no wrapping occurs.
+func (r *Request) body() io.ReadCloser {
+	if r.http.Body == nil {
+		return nil
 	}
-	return json.Unmarshal(body.Bytes(), v)
+	limit := r.effectiveBodyLimit()
+	if limit < 0 {
+		return r.http.Body
+	}
+	if limit > 0 && !r.bodyWrapped {
+		r.bodyWrapped = true
+		var w http.ResponseWriter
+		if r.response != nil {
+			w = r.response.Raw()
+		}
+		r.http.Body = http.MaxBytesReader(w, r.http.Body, limit)
+	}
+	return r.http.Body
 }
 
-func (body *Body) XML(v interface{}) error {
-	if body.error != nil {
-		return body.error
+// effectiveBodyLimit returns the per-request body limit:
+//
+//	bodyLimitOverride < 0  → unlimited
+//	bodyLimitOverride > 0  → enforce that many bytes
+//	bodyLimitOverride == 0 → use appBodyLimit
+func (r *Request) effectiveBodyLimit() int64 {
+	if r.bodyLimitOverride < 0 {
+		return -1
 	}
-	return xml.Unmarshal(body.Bytes(), v)
+	if r.bodyLimitOverride > 0 {
+		return r.bodyLimitOverride
+	}
+	return r.appBodyLimit
 }

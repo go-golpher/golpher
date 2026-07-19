@@ -1,13 +1,12 @@
 package golpher
 
 import (
-	"bytes"
-	"io"
 	"log"
-	"math"
 	"net/http"
 )
 
+// Recover returns middleware that converts panics into 500 Internal
+// Server Error responses. The original panic value is logged.
 func Recover() MiddlewareFunc {
 	return func(next HandlerFunc) HandlerFunc {
 		return func(req *Request, res *Response) (err error) {
@@ -22,37 +21,19 @@ func Recover() MiddlewareFunc {
 	}
 }
 
+// BodyLimit returns middleware that overrides the per-request body
+// size limit. Enforcement is lazy: the body is not read or wrapped
+// until the handler first accesses it via http.MaxBytesReader.
+//
+// Semantics:
+//
+//	BodyLimit(n < 0)  → unlimited for this route
+//	BodyLimit(0)      → use the app-level default
+//	BodyLimit(n > 0)  → enforce at most n bytes
 func BodyLimit(maxBytes int64) MiddlewareFunc {
 	return func(next HandlerFunc) HandlerFunc {
 		return func(req *Request, res *Response) error {
-			if maxBytes < 0 {
-				return next(req, res)
-			}
-			if req.http.ContentLength > maxBytes {
-				return ErrorGolpher{Code: http.StatusRequestEntityTooLarge, Message: http.StatusText(http.StatusRequestEntityTooLarge)}
-			}
-			if req.http.Body != nil {
-				limit := maxBytes + 1
-				if maxBytes == math.MaxInt64 {
-					limit = maxBytes
-				}
-				data, err := io.ReadAll(io.LimitReader(req.http.Body, limit))
-				if err != nil {
-					return err
-				}
-				if int64(len(data)) > maxBytes {
-					return ErrorGolpher{Code: http.StatusRequestEntityTooLarge, Message: http.StatusText(http.StatusRequestEntityTooLarge)}
-				}
-				body := req.body
-				if body == nil {
-					body = &Body{}
-					req.body = body
-				}
-				body.bytes = data
-				body.error = nil
-				body.loaded = true
-				req.http.Body = io.NopCloser(bytes.NewReader(data))
-			}
+			req.bodyLimitOverride = maxBytes
 			return next(req, res)
 		}
 	}
