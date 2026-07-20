@@ -34,7 +34,7 @@ A middleware can stop the chain by returning an error before calling `next`.
 func RequireAuth(next golpher.HandlerFunc) golpher.HandlerFunc {
 	return func(req *golpher.Request, res *golpher.Response) error {
 		if req.Raw().Header.Get("Authorization") == "" {
-			return req.NewError(http.StatusUnauthorized, "unauthorized")
+			return golpher.ErrorGolpher{Code: http.StatusUnauthorized, Message: "unauthorized"}
 		}
 		return next(req, res)
 	}

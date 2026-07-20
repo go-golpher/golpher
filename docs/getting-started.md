@@ -27,7 +27,7 @@ app := golpher.New()
 
 ```go
 app.GET("/hello", func(req *golpher.Request, res *golpher.Response) error {
-	return res.String("hello")
+    return res.String("hello")
 })
 ```
 
@@ -44,17 +44,19 @@ Use `UseHTTP` for existing standard-library middleware.
 
 ```go
 app.UseHTTP(func(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Service", "golpher")
-		next.ServeHTTP(w, r)
-	})
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("X-Service", "golpher")
+        next.ServeHTTP(w, r)
+    })
 })
 ```
 
 ## Start a server
 
 ```go
-app.Listen()
+if err := app.Listen(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 For production, prefer `app.Server(addr)` so you can own lifecycle, TLS, shutdown, and deployment wiring explicitly.
@@ -62,6 +64,22 @@ For production, prefer `app.Server(addr)` so you can own lifecycle, TLS, shutdow
 ```go
 srv := app.Server(":8080")
 if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-	log.Fatal(err)
+    log.Fatal(err)
 }
 ```
+
+## QUERY method
+
+Register a handler for the HTTP `QUERY` method (RFC 10008):
+
+```go
+app.QUERY("/search", func(req *golpher.Request, res *golpher.Response) error {
+    var query SearchInput
+    if err := req.BodyJSON(&query); err != nil {
+        return err
+    }
+    return res.JSON(results)
+})
+```
+
+`QUERY` requests require a `Content-Type` header; the framework rejects missing headers with `400 Bad Request`.
