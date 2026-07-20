@@ -175,16 +175,24 @@ func isParamName(name string) bool {
 		return false
 	}
 	first := name[0]
-	if !((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_') {
+	if !isASCIIAlpha(first) && first != '_' {
 		return false
 	}
 	for i := 1; i < len(name); i++ {
 		c := name[i]
-		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+		if !isASCIIAlpha(c) && !isASCIIDigit(c) && c != '_' {
 			return false
 		}
 	}
 	return true
+}
+
+func isASCIIAlpha(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+func isASCIIDigit(c byte) bool {
+	return c >= '0' && c <= '9'
 }
 
 func splitPattern(pattern string) []string {
@@ -386,15 +394,16 @@ func compileRouteSegmentsResult(pattern string) ([]routeSegment, []string) {
 	segments := make([]routeSegment, len(parts))
 	var names []string
 	for i, part := range parts {
-		if strings.HasPrefix(part, ":") {
+		switch {
+		case strings.HasPrefix(part, ":"):
 			name := part[1:]
 			segments[i] = routeSegment{kind: routeSegmentParam, value: name}
 			names = append(names, name)
-		} else if strings.HasPrefix(part, "*") {
+		case strings.HasPrefix(part, "*"):
 			name := part[1:]
 			segments[i] = routeSegment{kind: routeSegmentWildcard, value: name}
 			names = append(names, name)
-		} else {
+		default:
 			segments[i] = routeSegment{kind: routeSegmentStatic, value: part}
 		}
 	}

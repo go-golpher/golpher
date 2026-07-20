@@ -26,8 +26,7 @@ func TestFromHTTPHandlerReturnsUsableHandlerFunc(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("ok"))
 	}))
-	var hf golpher.HandlerFunc = fn
-	_ = hf
+	golpher.New().GET("/", fn)
 }
 
 func TestFromHTTPHandlerFuncReturnsUsableHandlerFunc(t *testing.T) {
@@ -35,8 +34,7 @@ func TestFromHTTPHandlerFuncReturnsUsableHandlerFunc(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("ok"))
 	})
-	var hf golpher.HandlerFunc = fn
-	_ = hf
+	golpher.New().GET("/", fn)
 }
 
 func TestHandleAndVerbShorthandsAcceptHandlerFunc(t *testing.T) {
@@ -94,16 +92,21 @@ func TestAppIsFrozen(t *testing.T) {
 }
 
 func TestListenSignatureReturnsError(t *testing.T) {
-	var listen func(*golpher.App, ...golpher.ListenConfig) error = (*golpher.App).Listen
-	_ = listen
+	requireListenSignature((*golpher.App).Listen)
 }
+
+func requireListenSignature(func(*golpher.App, ...golpher.ListenConfig) error) {}
 
 func TestListenReturnsBindError(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	t.Cleanup(func() {
+		if err := l.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 
 	port := l.Addr().(*net.TCPAddr).Port
 	app := golpher.New(golpher.AppConfig{Port: port, DisableBanner: true})

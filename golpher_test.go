@@ -1939,6 +1939,11 @@ func TestListenReturnsErrorOnBindFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := l.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 	port := l.Addr().(*net.TCPAddr).Port
 
 	app := New(AppConfig{Port: port, DisableBanner: true})
@@ -1946,8 +1951,6 @@ func TestListenReturnsErrorOnBindFailure(t *testing.T) {
 	if listenErr == nil {
 		t.Fatal("expected Listen to return an error on already-bound port")
 	}
-
-	l.Close()
 }
 
 type benchmarkResponseWriter struct {
@@ -2470,7 +2473,7 @@ func TestConcurrentFreezeAndRegister(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		for i := 0; i < 100; i++ {
 			app.GET("/race"+string(rune('a'+i%26)), func(_ *Request, res *Response) error { return nil })
 		}
